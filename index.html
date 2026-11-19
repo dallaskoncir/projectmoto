@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dirt bike feel test</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #b8c6d1;
+        font-family: system-ui, sans-serif;
+      }
+      #overlay {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.55);
+        color: white;
+        font-size: 28px;
+        pointer-events: none;
+      }
+      #status {
+        position: fixed;
+        top: 24px;
+        left: 0;
+        right: 0;
+        text-align: center;
+        color: #111;
+        font-size: 28px;
+        font-weight: bold;
+        pointer-events: none;
+      }
+      #hud {
+        position: fixed;
+        left: 16px;
+        bottom: 16px;
+        color: #111;
+        font: 16px ui-monospace, monospace;
+        white-space: pre;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="overlay">Connect a controller and press a button</div>
+    <div id="status"></div>
+    <div id="hud"></div>
+    <script>
+      // Show crashes on screen instead of only in the dev console
+      function showError(message) {
+        const overlay = document.getElementById('overlay');
+        overlay.style.display = 'flex';
+        overlay.textContent = 'Error: ' + message;
+      }
+      window.addEventListener('error', (event) => showError(event.message));
+      window.addEventListener('unhandledrejection', (event) => showError(String(event.reason)));
+    </script>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
