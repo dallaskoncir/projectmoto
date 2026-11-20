@@ -187,10 +187,14 @@ brakeFolder.add(settings, 'lockedTireGrip', 0.3, 1, 0.01).name('locked tire grip
 const corneringFolder = gui.addFolder('Grip and cornering');
 corneringFolder.add(settings, 'frontGrip', 0.1, 5, 0.05).name('front grip');
 corneringFolder.add(settings, 'rearGrip', 0.1, 5, 0.05).name('rear grip');
-corneringFolder.add(settings, 'maxLeanAngleDegrees', 5, 65, 1).name('full stick lean');
-corneringFolder.add(settings, 'pressExtraLeanDegrees', 0, 25, 1).name('extra lean when pressing bike in');
-corneringFolder.add(settings, 'forwardExtraLeanDegrees', 0, 25, 1).name('extra lean when rider forward');
-corneringFolder.add(settings, 'leanGripUse', 0.5, 1, 0.01).name('share of grip used for lean');
+corneringFolder.add(settings, 'fullStickOverLeanDegrees', 0, 20, 0.5).name('full stick lean past grip');
+corneringFolder.add(settings, 'bermNoSlideBankDegrees', 1, 30, 1).name('berm bank that holds full stick');
+corneringFolder.add(settings, 'leanGripUse', 0.5, 1, 0.01).name('grip estimate scale (slide starts)');
+corneringFolder.add(settings, 'overLeanRangeDegrees', 1, 20, 0.5).name('lean past grip for full slide');
+corneringFolder.add(settings, 'overLeanRearGripLoss', 0, 1, 0.05).name('rear grip lost in a slide');
+corneringFolder.add(settings, 'overLeanSlideDrag', 0, 2, 0.05).name('slide drag (scrubs speed)');
+corneringFolder.add(settings, 'throttleRearGripUse', 0, 3, 0.05).name('throttle use of rear grip');
+corneringFolder.add(settings, 'slideHoldSeconds', 0.2, 5, 0.1).name('slide hold time before low-side');
 corneringFolder.add(settings, 'pressGripBonus', 0, 1, 0.01).name('extra grip when pressing bike in');
 corneringFolder.add(settings, 'countersteerLimitG', 0, 1.5, 0.05).name('countersteer limit (g)');
 corneringFolder.add(settings, 'riderLeanInitiation', 0, 30, 0.5).name('rider hips lean start');
@@ -210,7 +214,12 @@ riderFolder.add(settings, 'airPitchDamping', 0, 500, 1).name('air pitch damping'
 riderFolder.add(settings, 'wheelInertia', 0.05, 5, 0.05).name('wheel inertia (air brake/throttle pitch)');
 riderFolder.add(settings, 'scrubFullLeanDegrees', 5, 70, 1).name('bike lean for full scrub');
 riderFolder.add(settings, 'scrubHeightAbsorb', 0, 1, 0.01).name('scrub height absorb');
+riderFolder.add(settings, 'preloadPopSpeed', 0, 5, 0.1).name('preload pop (m/s up)');
+riderFolder.add(settings, 'preloadChargeSeconds', 0.05, 1.5, 0.05).name('preload hold time');
+riderFolder.add(settings, 'preloadEarlySeconds', 0, 1, 0.01).name('preload flick window before lip');
+riderFolder.add(settings, 'preloadLateSeconds', 0, 0.5, 0.01).name('preload flick window after lip');
 riderFolder.add(settings, 'maxWhipLeanDegrees', 0, 90, 1).name('whip lean angle');
+riderFolder.add(settings, 'leftStickWhipShare', 0, 1, 0.05).name('left stick whip share');
 riderFolder.add(settings, 'whipLeanResponse', 1, 30, 0.5).name('whip lean response');
 riderFolder.add(settings, 'whipYawTorque', 0, 2000, 10).name('whip yaw torque');
 riderFolder.add(settings, 'whipYawReturn', 0, 3000, 10).name('whip yaw return');
@@ -389,7 +398,10 @@ function updateBikeVisuals(interpolation: number, frameSeconds: number) {
   }
   const speed = Math.abs(vehicle.currentVehicleSpeed());
   const wantsToStand = state.isInAir || (speed > 5 && Math.abs(state.bodyLeanRadians) < THREE.MathUtils.degToRad(12));
-  riderStanding += ((wantsToStand ? 1 : 0) - riderStanding) * (1 - Math.exp(-4 * frameSeconds));
+  // Preloading crouches the rider down onto the bike; the flick springs them back up
+  const standTarget = (wantsToStand ? 1 : 0) * (1 - 0.8 * state.preloadCharge);
+  const standResponse = standTarget > riderStanding && state.isInAir ? 12 : 4;
+  riderStanding += (standTarget - riderStanding) * (1 - Math.exp(-standResponse * frameSeconds));
   bikeModel.update({
     rearAxle: axles[rearWheelIndex],
     frontAxle: axles[frontWheelIndex],
@@ -445,15 +457,16 @@ function updateHud(frameSeconds: number) {
     `rear wheel ${(state.wheelSpinRates[rearWheelIndex] * wheelRadius * 3.6).toFixed(0)} km/h   ` +
     `front ${frontContact}   rear ${rearContact}\n` +
     `bike lean ${toDegrees(state.bikeLeanRadians)}°   bike+rider lean ${toDegrees(state.bodyLeanRadians)}°   ` +
-    `bars ${toDegrees(state.handlebarRadians)}°   cornering ${(Math.abs(state.lateralAcceleration) / settings.gravity).toFixed(2)} g\n` +
+    `bars ${toDegrees(state.handlebarRadians)}°   cornering ${(Math.abs(state.lateralAcceleration) / settings.gravity).toFixed(2)} g   ` +
+    `rear slide ${(state.rearSlideAmount * 100).toFixed(0)}%${state.slideTime > 0.5 * settings.slideHoldSeconds ? ' FALLING IN' : ''}\n` +
     `last jump ${lastJump.distance.toFixed(1)} m   air ${lastJump.airTime.toFixed(2)} s   ` +
-    `scrub ${lastJump.scrubPercent.toFixed(0)}%   landing ${lastJump.landingLoad.toFixed(1)} g ${lastJump.result}\n` +
+    `scrub ${lastJump.scrubPercent.toFixed(0)}%   preload ${lastJump.preloadPercent.toFixed(0)}%   landing ${lastJump.landingLoad.toFixed(1)} g ${lastJump.result}\n` +
     `${controllerDescription}\n` +
     `throttle ${controls.throttle.toFixed(2)}   ` +
     `front brake ${state.brakeLevers[frontWheelIndex].toFixed(2)}${state.wheelLocked[frontWheelIndex] ? ' LOCKED' : ''}   ` +
     `rear brake ${state.brakeLevers[rearWheelIndex].toFixed(2)}${state.wheelLocked[rearWheelIndex] ? ' LOCKED' : ''}   ` +
     `steer ${controls.steering.toFixed(2)}   rider forward ${controls.riderForwardLean.toFixed(2)}   ` +
-    `rider side ${controls.riderSideLean.toFixed(2)}`;
+    `rider side ${controls.riderSideLean.toFixed(2)}   preload ${(state.preloadCharge * 100).toFixed(0)}%`;
 }
 
 function frame(now: number) {

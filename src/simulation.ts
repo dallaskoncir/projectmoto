@@ -33,10 +33,14 @@ export const settings = {
   // Cornering. Bike and rider together balance like an inverted pendulum: gravity pulls the lean over,
   // the tires' cornering force pushes it back up. The left stick asks for a lean and the rider's balance
   // steers the bars (countersteering first) to get there. The turn comes from the lean.
-  maxLeanAngleDegrees: 48, // bike-and-rider lean a full left stick asks for
-  pressExtraLeanDegrees: 10, // more lean a full left stick reaches while the right stick presses the bike into the turn
-  forwardExtraLeanDegrees: 8, // more lean a full left stick reaches with the rider forward (weight on the front tire)
-  leanGripUse: 0.8, // share of the tires' cornering grip the rider leans on; the rest is margin for bumps and throttle
+  throttleRearGripUse: 2, // how much of the rear's grip the engine's drive uses up (1 = all of it, the friction circle); more = the rear steps out on the gas sooner
+  fullStickOverLeanDegrees: 8, // how much more lean than the tires hold a full left stick asks for; about 85% stick is right at the limit
+  bermNoSlideBankDegrees: 10, // a berm banked this much holds a full stick without the rear stepping out
+  overLeanRangeDegrees: 8, // lean past what the tires hold over which the rear steps all the way out
+  overLeanRearGripLoss: 0.5, // share of its sideways grip the rear gives up when stepped all the way out
+  overLeanSlideDrag: 0.6, // drag of the stepped-out rear, as a share of its load: a slide scrubs speed, which tightens the turn
+  slideHoldSeconds: 1.2, // how long the rider can hold a full stick slide before it falls in and low-sides; easing off resets it
+  leanGripUse: 0.8, // scales the tires' estimated cornering grip to what they really hold; sets where the rear starts stepping out
   leanResponse: 6, // how quickly the bike gets to the lean the stick asks for
   leanPendulumHeight: 0.9, // meters from tires to the bike-and-rider center of mass; higher = lean changes more slowly
   steeringLockDegrees: 30, // handlebar limit; caps how tight a slow turn can be
@@ -55,7 +59,13 @@ export const settings = {
   wheelInertia: 0.6, // per wheel, kg m^2; sets how much brake taps and throttle blips pitch the bike in the air (real MX rear wheel is about 0.6)
   scrubFullLeanDegrees: 30, // bike lean at the lip for a full scrub (a full right stick on its own gets there)
   scrubHeightAbsorb: 0.25, // share of upward takeoff speed a full scrub removes
+  // Preload: right stick back on the ground loads the suspension, a flick forward at the lip springs off it
+  preloadPopSpeed: 0.8, // meters per second of extra upward speed a full preload adds at the lip
+  preloadChargeSeconds: 0.35, // how long the stick has to be held back to fully load the suspension
+  preloadEarlySeconds: 0.3, // how long before the bike leaves the ground the forward flick still counts
+  preloadLateSeconds: 0.1, // and how long after
   maxWhipLeanDegrees: 85, // how far the rider lays the bike over in the air
+  leftStickWhipShare: 0.5, // share of the full whip the left stick gives on its own; the right stick adds the rest and swings it further
   whipLeanResponse: 7,
   whipYawTorque: 550,
   whipYawReturn: 600, // pulls the bike back in line with its direction of travel in the air
@@ -209,7 +219,10 @@ export const state = {
   brakeLevers: [0, 0], // 0..1 per wheel (rear, front) after combining and the RB build-up
   brakeForces: [0, 0], // newtons each tire is actually braking with
   wheelLocked: [false, false], // braked past the tire's grip: not turning, sliding
-  lastJump: { distance: 0, airTime: 0, scrubPercent: 0, landingLoad: 0, result: '' },
+  rearSlideAmount: 0, // 0..1, how far past what the tires hold the bike is leaned: the rear steps out
+  slideTime: 0, // seconds the rider has been holding the bike in a slide; the hold fades out toward slideHoldSeconds
+  preloadCharge: 0, // 0..1, how loaded the suspension is from the rider pushing down (right stick back)
+  lastJump: { distance: 0, airTime: 0, scrubPercent: 0, preloadPercent: 0, landingLoad: 0, result: '' },
   statusMessage: '',
   statusTimeRemaining: 0,
 };
@@ -228,6 +241,11 @@ const slideVelocity = new THREE.Vector3();
 let wasInAir = false;
 let currentAirTime = 0;
 let takeoffScrubPercent = 0;
+let takeoffPreloadPercent = 0;
+// A forward flick releases the preload: it springs the bike up if the wheels leave the ground soon after
+let preloadRelease = 0;
+let preloadReleaseTimeRemaining = 0;
+let timeSinceTakeoff = Infinity;
 const takeoffPosition = new THREE.Vector3();
 let landingLoadTimeRemaining = 0;
 const bikeUpAxis = new THREE.Vector3();
@@ -291,6 +309,12 @@ export function resetBike(nearX?: number, nearZ?: number) {
   chassisBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
   chassisBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
   previousVelocity.set(0, 0, 0);
+  state.preloadCharge = 0;
+  state.rearSlideAmount = 0;
+  state.slideTime = 0;
+  preloadRelease = 0;
+  preloadReleaseTimeRemaining = 0;
+  timeSinceTakeoff = Infinity;
   smoothedWheelLoads.fill((settings.bikeMass * settings.gravity) / 2);
   state.bikeLeanRadians = 0;
   state.bodyLeanRadians = 0;
@@ -522,6 +546,23 @@ function applyLockedTireSlide() {
   }
 }
 
+// A rear stepped out past its grip (leaned further than the tires hold) is dragging sideways through the
+// dirt, which scrubs speed. Rapier's rolling tire only resists the sideways part, so the drag is added here,
+// against the way the rear contact patch is moving.
+function applyRearSlideDrag() {
+  if (state.rearSlideAmount <= 0 || !vehicle.wheelIsInContact(rearWheelIndex)) return;
+  const contactPoint = vehicle.wheelContactPoint(rearWheelIndex);
+  if (!contactPoint) return;
+  const pointVelocity = chassisBody.velocityAtPoint(contactPoint);
+  slideVelocity.set(pointVelocity.x, 0, pointVelocity.z);
+  const speed = slideVelocity.length();
+  if (speed < 0.5) return;
+  const load = vehicle.wheelSuspensionForce(rearWheelIndex) ?? 0;
+  const impulse = Math.min(settings.overLeanSlideDrag * state.rearSlideAmount * load * physicsTimestep, 0.3 * settings.bikeMass * speed);
+  slideVelocity.multiplyScalar(-impulse / speed);
+  chassisBody.applyImpulseAtPoint(slideVelocity, contactPoint, true);
+}
+
 // The rider's balance on the ground: turn the left stick into a handlebar angle, and move the
 // bike-and-rider lean by what the tires actually did. Returns the steering angle on the ground, positive right.
 function balanceAndSteer(forwardSpeed: number, groundBank: number) {
@@ -544,30 +585,22 @@ function balanceAndSteer(forwardSpeed: number, groundBank: number) {
   // by the bars, not by falling in. Holding a lean needs lateral acceleration g*tan(lean) = speed^2 * curvature.
   const speedSquared = Math.max(forwardSpeed, 0.5) ** 2;
   const lockLimitedLean = Math.atan((speedSquared * Math.tan(groundSteeringLock)) / (wheelbase * gravity));
-  // Pressing the bike into the turn (right stick the same way as the left) lets the rider lean further
+  // Pressing the bike into the turn (right stick toward the outside) digs the side knobs in for more grip
   const pressIntoStick = Math.max(0, state.bikePressAmount * Math.sign(controls.steering));
-  // A berm banked into the turn lets the rider lean further over (relative to the ground it's the same lean)
+  // A berm banked into the turn holds the bike up, so it can lean further over
   const turnSide = Math.sign(controls.steering) || Math.sign(bodyLean);
   const bankIntoTurn = groundBank * turnSide;
-  // Never ask for lean within a few degrees of the low-side, so a little overshoot doesn't put it down
-  const stickLean = Math.min(
-    settings.lowSideLeanDegrees - 6 + THREE.MathUtils.radToDeg(Math.max(0, bankIntoTurn)),
-    settings.maxLeanAngleDegrees +
-      settings.pressExtraLeanDegrees * pressIntoStick +
-      settings.forwardExtraLeanDegrees * Math.max(0, controls.riderForwardLean) +
-      THREE.MathUtils.radToDeg(Math.max(0, bankIntoTurn)),
-  );
-  // Nor more than the dirt can hold. Holding a lean takes g*tan(lean) of sideways force, which the bike's
+  // How far the tires can hold the bike over. Holding a lean takes g*tan(lean) of sideways force, which the bike's
   // geometry splits between the tires by where the center of mass sits, so whichever tire runs out first
   // sets the limit. Each tire's grip grows with the load on it, so the rider's weight matters: forward
   // plants the front (the one that washes out first), back lightens it. Throttle and brakes use up part
-  // of each tire's grip first, so on the gas the bike stands up and runs wide.
+  // of each tire's grip first: brakes pick the bike up, and too much gas leaned over steps the rear out.
   const pressedGrip = 1 + settings.pressGripBonus * pressIntoStick;
   const totalWeight = settings.bikeMass * gravity;
   const frontLoad = Math.max(smoothedWheelLoads[frontWheelIndex], 50);
   const rearLoad = Math.max(smoothedWheelLoads[rearWheelIndex], 50);
   const frontPull = state.brakeForces[frontWheelIndex] / frontLoad;
-  const rearPull = Math.max(vehicle.wheelEngineForce(rearWheelIndex) ?? 0, state.brakeForces[rearWheelIndex]) / rearLoad;
+  const rearPull = Math.max((vehicle.wheelEngineForce(rearWheelIndex) ?? 0) * settings.throttleRearGripUse, state.brakeForces[rearWheelIndex]) / rearLoad;
   // A locked tire only has its plowing grip sideways
   const sidewaysGripLeft = (wheelIndex: number, grip: number, pull: number) =>
     state.wheelLocked[wheelIndex]
@@ -576,12 +609,34 @@ function balanceAndSteer(forwardSpeed: number, groundBank: number) {
   const frontCorneringGrip = (sidewaysGripLeft(frontWheelIndex, settings.frontGrip, frontPull) * frontLoad) / (frontCorneringShare * totalWeight);
   const rearCorneringGrip = (sidewaysGripLeft(rearWheelIndex, settings.rearGrip, rearPull) * rearLoad) / (rearCorneringShare * totalWeight);
   const flatCorneringGrip = Math.min(frontCorneringGrip, rearCorneringGrip);
+  // Off the gas: what the stick works from, so the gas doesn't quietly stand the bike up for the rider.
+  // Drive also squats the bike, taking weight off the front, which is put back for this.
+  const driveWeightTransfer = (Math.max(0, vehicle.wheelEngineForce(rearWheelIndex) ?? 0) * 0.6) / wheelbase;
+  const coastingFrontLoad = frontLoad + driveWeightTransfer;
+  const coastingRearLoad = Math.max(50, rearLoad - driveWeightTransfer);
+  const frontCoastingGrip = (sidewaysGripLeft(frontWheelIndex, settings.frontGrip, frontPull) * coastingFrontLoad) / (frontCorneringShare * totalWeight);
+  const rearCoastingGrip =
+    (sidewaysGripLeft(rearWheelIndex, settings.rearGrip, state.brakeForces[rearWheelIndex] / coastingRearLoad) * coastingRearLoad) /
+    (rearCorneringShare * totalWeight);
+  const coastingCorneringGrip = Math.min(frontCoastingGrip, rearCoastingGrip);
   // On a bank the ground itself pushes the bike into the turn by tan(bank) of its weight, on top of the
   // tires' grip. Off-camber (negative bank) takes it away.
   const corneringGrip = Math.max(0, flatCorneringGrip + Math.tan(bankIntoTurn));
-  // Keep some of the tires' grip in reserve (front slip, a little throttle); the berm's push is solid
+  // The estimate above reads high against what Rapier's tires deliver, so it's scaled down; the berm's push is solid
   const gripLimitedLean = Math.atan(Math.max(0, settings.leanGripUse * flatCorneringGrip + Math.tan(bankIntoTurn)));
-  const reachableLean = Math.min(THREE.MathUtils.degToRad(stickLean), 0.9 * lockLimitedLean, gripLimitedLean);
+  const coastingGripLimitedLean = Math.atan(Math.max(0, settings.leanGripUse * coastingCorneringGrip + Math.tan(bankIntoTurn)));
+  // Full stick asks for a set amount more lean than the tires hold (pressed in, weight forward and on the
+  // gas all move that limit): past it the rear steps out. Easing off a little keeps it at the limit. A good
+  // berm holds the bike, so the margin fades out as the bank steepens and full stick there is just the limit.
+  // Never within a few degrees of the low-side, and at low speed no more than the bars can hold.
+  const bermHold = THREE.MathUtils.clamp(bankIntoTurn / THREE.MathUtils.degToRad(settings.bermNoSlideBankDegrees), 0, 1);
+  const fullStickLean = Math.min(
+    THREE.MathUtils.degToRad(settings.lowSideLeanDegrees - 6) + Math.max(0, bankIntoTurn),
+    coastingGripLimitedLean + (1 - bermHold) * THREE.MathUtils.degToRad(settings.fullStickOverLeanDegrees),
+  );
+  const reachableLean = Math.min(fullStickLean, 0.9 * lockLimitedLean);
+  const overLean = Math.abs(bodyLean) - gripLimitedLean;
+  state.rearSlideAmount = balanceWeight * THREE.MathUtils.clamp(overLean / THREE.MathUtils.degToRad(settings.overLeanRangeDegrees), 0, 1);
   const targetBodyLean = controls.steering * reachableLean;
 
   // Critically damped approach to the target lean. To get that lean acceleration the tires have to push
@@ -630,11 +685,15 @@ function balanceAndSteer(forwardSpeed: number, groundBank: number) {
   // ground stopped holding that much lean: off the end of a berm, gas on, a light front) and the tires can't
   // stand it up, the rider gets a leg out and catches it, with limited strength. Pushing for full lean
   // right at the limit isn't saved, and a big enough overload is more than the rider can catch.
-  const isEasingOff =
-    controls.steering * Math.sign(bodyLean) < 0.95 || Math.abs(targetBodyLean) < Math.abs(bodyLean) - THREE.MathUtils.degToRad(4);
+  // With the rear stepped well out (too much lean or too much gas) the rider holds the slide, but only for
+  // so long: the hold fades and the bike falls in. Easing the stick or the gas brings the rear back in,
+  // which gives the rider their strength back.
+  if (state.rearSlideAmount > 0.5) state.slideTime += physicsTimestep;
+  else state.slideTime = Math.max(0, state.slideTime - 2 * physicsTimestep);
+  const slideHold = 1 - THREE.MathUtils.smoothstep(state.slideTime, 0.5 * settings.slideHoldSeconds, settings.slideHoldSeconds);
   const fallingInBeyondWanted = (leanAcceleration - desiredLeanAcceleration) * Math.sign(bodyLean);
-  if (isEasingOff && fallingInBeyondWanted > 0) {
-    leanAcceleration -= Math.sign(bodyLean) * balanceWeight * Math.min(settings.riderSaveStrength, fallingInBeyondWanted);
+  if (fallingInBeyondWanted > 0) {
+    leanAcceleration -= Math.sign(bodyLean) * balanceWeight * Math.min(settings.riderSaveStrength * slideHold, fallingInBeyondWanted);
   }
 
   // Inside foot: in a slow, tight turn the bars or the tires run out and the bike starts falling in past
@@ -711,6 +770,7 @@ export function physicsStep() {
     state.lastJump.distance = takeoffPosition.distanceTo(new THREE.Vector3(position.x, 0, position.z));
     state.lastJump.airTime = currentAirTime;
     state.lastJump.scrubPercent = takeoffScrubPercent;
+    state.lastJump.preloadPercent = takeoffPreloadPercent;
     state.lastJump.landingLoad = 0;
     landingLoadTimeRemaining = 0.3;
     judgeLanding();
@@ -746,21 +806,26 @@ export function physicsStep() {
   state.bikePressAmount += (bikeLayOver - state.bikePressAmount) * riderBlend;
   const bikePressLean = THREE.MathUtils.degToRad(settings.bikePressDegrees) * state.bikePressAmount;
 
+  // Whip: in the air the left stick keeps meaning "lean", so held through the lip it lays the bike over and
+  // starts a whip on its own. The right stick (body the other way) lays it over the rest of the way and
+  // swings it further. Together they can ask for more swing than either alone; the lay-over tops out.
+  const whipAmount = controls.steering * settings.leftStickWhipShare + bikeLayOver; // +1 = bike over to the right
   if (isInAir) {
-    // Whip: the rider throws the bike over further, nothing to balance against
-    const whipLean = bikeLayOver * THREE.MathUtils.degToRad(settings.maxWhipLeanDegrees);
+    // Nothing to balance against in the air, so the bike goes straight to the lay-over asked for
+    const whipLean = THREE.MathUtils.clamp(whipAmount, -1, 1) * THREE.MathUtils.degToRad(settings.maxWhipLeanDegrees);
     state.bikeLeanRadians += (whipLean - state.bikeLeanRadians) * (1 - Math.exp(-settings.whipLeanResponse * physicsTimestep));
     state.bodyLeanRadians = state.bikeLeanRadians - bikePressLean;
     state.bodyLeanRate = 0;
     state.handlebarRadians = 0;
     vehicle.setWheelSteering(frontWheelIndex, 0);
+    state.rearSlideAmount = 0;
   } else {
     const { groundSteering: balanceSteering, balanceWeight, footWeight, bankIntoTurn } = balanceAndSteer(forwardSpeed, smoothGroundBank());
     // When braking steps the rear out (locked, or light under hard front braking), the rider steers into the
     // slide: the bars turn toward where the rear is going, so the front stops dragging the nose further around
     let groundSteering = balanceSteering;
     const isBraking = state.brakeLevers[frontWheelIndex] > 0.02 || state.brakeLevers[rearWheelIndex] > 0.02;
-    const rearSlide = isBraking || state.wheelLocked[rearWheelIndex] ? rearSlipRadians() : 0;
+    const rearSlide = isBraking || state.wheelLocked[rearWheelIndex] || state.rearSlideAmount > 0 ? rearSlipRadians() : 0;
     const slideBeyondGrip = Math.sign(rearSlide) * Math.max(0, Math.abs(rearSlide) - THREE.MathUtils.degToRad(2));
     if (slideBeyondGrip !== 0 && forwardSpeed > settings.feetDownSpeed) {
       const handlebarLock = THREE.MathUtils.degToRad(settings.steeringLockDegrees);
@@ -792,7 +857,8 @@ export function physicsStep() {
     // the cornering grip; the full cost shows up in how far the rider can lean (balanceAndSteer). Charging
     // it here too lets the rear step out under braking and high-side the bike. A locked tire keeps only its
     // plowing grip sideways and drags fore and aft on its own (applyLockedTireSlide).
-    const grip = tireGrips[wheelIndex] * (state.wheelLocked[wheelIndex] ? settings.lockedTireSideGrip : 1);
+    const overLeanGrip = wheelIndex === rearWheelIndex && !isInAir ? 1 - settings.overLeanRearGripLoss * state.rearSlideAmount : 1;
+    const grip = tireGrips[wheelIndex] * (state.wheelLocked[wheelIndex] ? settings.lockedTireSideGrip : 1) * overLeanGrip;
     vehicle.setWheelFrictionSlip(wheelIndex, grip);
   }
 
@@ -844,11 +910,14 @@ export function physicsStep() {
       chassisBody.setLinvel({ x: velocity.x, y: scrubbedUpwardSpeed, z: velocity.z }, true);
     }
     takeoffScrubPercent = scrubFraction * 100;
+    takeoffPreloadPercent = 0;
     const position = chassisBody.translation();
     takeoffPosition.set(position.x, 0, position.z);
     currentAirTime = 0;
+    timeSinceTakeoff = 0;
   }
   if (isInAir) currentAirTime += physicsTimestep;
+  updatePreload(isInAir);
   wasInAir = isInAir;
 
   if (landingLoadTimeRemaining > 0) {
@@ -871,7 +940,7 @@ export function physicsStep() {
     // Whip yaw: the bike swings sideways the way it's laid over, and a spring pulls it back in line with the
     // direction of travel. Laid over right yaws the nose right, which is negative around world up.
     const yawTorque =
-      -bikeLayOver * settings.whipYawTorque + settings.whipYawReturn * yawFromTravelRadians() - settings.airYawDamping * yawRate;
+      -THREE.MathUtils.clamp(whipAmount, -1.5, 1.5) * settings.whipYawTorque + settings.whipYawReturn * yawFromTravelRadians() - settings.airYawDamping * yawRate;
     controlTorque.addScaledVector(worldUp, yawTorque);
   }
 
@@ -882,8 +951,38 @@ export function physicsStep() {
   vehicle.updateVehicle(physicsTimestep);
   applyGroundSidePush();
   applyLockedTireSlide();
+  if (!isInAir) applyRearSlideDrag();
   world.step();
   contactsAreStale = false;
+}
+
+// Preload: holding the right stick back on the ground loads the suspension (the rider pushes the bike
+// down into the face), and flicking it forward lets the rider spring up off the bike as it leaves the
+// lip. The pop is extra upward speed, so the bike goes higher and further. It only counts when the flick
+// comes just before or just after the wheels leave the ground; let go too early and the load bleeds off.
+function updatePreload(isInAir: boolean) {
+  const stickBack = Math.max(0, -controls.riderForwardLean);
+  const flickedForward = controls.riderForwardLean > 0.5;
+  if (isInAir) timeSinceTakeoff += physicsTimestep;
+  if (!isInAir && stickBack > 0.5) {
+    state.preloadCharge = Math.min(stickBack, state.preloadCharge + physicsTimestep / settings.preloadChargeSeconds);
+  } else if (flickedForward && state.preloadCharge > 0.05) {
+    preloadRelease = state.preloadCharge;
+    preloadReleaseTimeRemaining = settings.preloadEarlySeconds;
+    state.preloadCharge = 0;
+  } else if (!isInAir || timeSinceTakeoff > settings.preloadLateSeconds) {
+    // Not pushing down any more: the suspension rebounds on its own and the load is gone
+    state.preloadCharge = Math.max(0, state.preloadCharge - physicsTimestep / 0.25);
+  }
+  if (preloadReleaseTimeRemaining <= 0) return;
+  preloadReleaseTimeRemaining -= physicsTimestep;
+  const justTookOff = isInAir && timeSinceTakeoff <= settings.preloadLateSeconds;
+  const velocity = chassisBody.linvel();
+  if (justTookOff && velocity.y > 0) {
+    chassisBody.setLinvel({ x: velocity.x, y: velocity.y + settings.preloadPopSpeed * preloadRelease, z: velocity.z }, true);
+    takeoffPreloadPercent = preloadRelease * 100;
+    preloadReleaseTimeRemaining = 0;
+  }
 }
 
 resetBike();

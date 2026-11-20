@@ -20,12 +20,12 @@ browser's "standard" mapping are used, so wheels and pedals are ignored.
 
 | Input | Action |
 | --- | --- |
-| RT | Throttle |
+| RT | Throttle. Leaned over, the drive uses up the rear tire's grip: too much gas mid-corner steps the rear out and runs wide, and held on it low-sides. Pick the bike up to get on the gas |
 | LT | Brakes, both wheels together (75% front by default) |
 | RB | Rear brake on its own (builds up while held), when combined brakes are switched off in the Brakes panel |
-| Left stick | Lean the bike and rider into a turn. The rider countersteers to get there. |
-| Right stick left/right | Move the rider's body that way, and the bike goes over the other way: stand it up or press it down in a turn, scrub off a lip, whip in the air |
-| Right stick up/down | Rider forward/back: weight shift on the ground, pitch in the air |
+| Left stick | Lean the bike and rider into a turn. The rider countersteers to get there. About 85% stick is the tires' limit; past it the rear steps out and the bike slides around tighter, scrubbing speed. Hold it there too long and it low-sides. A well-banked berm holds full stick. In the air it lays the bike over: hold it through the lip to start a whip |
+| Right stick left/right | Move the rider's body that way, and the bike goes over the other way: stand it up or press it down in a turn, scrub off a lip, whip in the air (with the left stick, the full whip with more swing) |
+| Right stick up/down | Rider forward/back: weight shift on the ground, pitch in the air. Preload: hold it back up the face of a jump and flick it forward at the lip to pop higher and further |
 | A | Back to the start |
 | D-pad left/right | Previous/next track |
 
