@@ -9,22 +9,18 @@ import {
   chassisHalfWidth,
   controls,
   frontWheelIndex,
-  knuckleX,
-  lipX,
+  loadTrack,
   physicsStep,
   physicsTimestep,
-  rampTriangleIndices,
-  rampVertices,
-  rampWidth,
   rearWheelIndex,
   resetBike,
   settings,
-  spawnPosition,
   state,
-  takeoffHeight,
+  track,
   vehicle,
   wheelRadius,
 } from './simulation.ts';
+import { cellSize, cellsPerSide, centerlineSpacing, mapSize, trackHalfWidth } from './track.ts';
 
 // ---------- Rendering ----------
 
@@ -36,7 +32,7 @@ document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xb8c6d1);
-scene.fog = new THREE.Fog(0xb8c6d1, 60, 180);
+scene.fog = new THREE.Fog(0xb8c6d1, 80, 260);
 
 const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 500);
 
@@ -52,31 +48,97 @@ sunLight.shadow.camera.bottom = -25;
 scene.add(sunLight, sunLight.target);
 const sunOffset = new THREE.Vector3(15, 30, 10);
 
-const groundMesh = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: 0x8a8478 }));
-groundMesh.rotation.x = -Math.PI / 2;
-groundMesh.receiveShadow = true;
-scene.add(groundMesh);
-const groundGrid = new THREE.GridHelper(200, 100, 0x5e5a52, 0x6f6a61); // 2 m squares make speed readable
-groundGrid.position.y = 0.01;
-scene.add(groundGrid);
+// ---------- Terrain ----------
 
-const rampGeometry = new THREE.BufferGeometry();
-rampGeometry.setAttribute('position', new THREE.Float32BufferAttribute(rampVertices, 3));
-rampGeometry.setIndex(rampTriangleIndices);
-rampGeometry.computeVertexNormals();
-const rampMesh = new THREE.Mesh(
-  rampGeometry,
-  new THREE.MeshStandardMaterial({ color: 0xc28a4a, flatShading: true, side: THREE.DoubleSide }),
-);
-rampMesh.castShadow = true;
-rampMesh.receiveShadow = true;
-scene.add(rampMesh);
-// White strips mark the lip and the knuckle (where the landing starts) so landing spots are easy to judge
-for (const edgeX of [lipX, knuckleX]) {
-  const edgeStrip = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.02, rampWidth), new THREE.MeshStandardMaterial({ color: 0xffffff }));
-  edgeStrip.position.set(edgeX, takeoffHeight + 0.01, 0);
-  scene.add(edgeStrip);
+// A 2 m grid laid over the ground in world space makes speed readable
+const gridCanvas = document.createElement('canvas');
+gridCanvas.width = gridCanvas.height = 64;
+const gridContext = gridCanvas.getContext('2d')!;
+gridContext.fillStyle = '#ffffff';
+gridContext.fillRect(0, 0, 64, 64);
+gridContext.fillStyle = '#d4d0c8';
+gridContext.fillRect(0, 0, 64, 2);
+gridContext.fillRect(0, 0, 2, 64);
+const gridTexture = new THREE.CanvasTexture(gridCanvas);
+gridTexture.wrapS = gridTexture.wrapT = THREE.RepeatWrapping;
+gridTexture.anisotropy = 8;
+gridTexture.colorSpace = THREE.SRGBColorSpace;
+
+const terrainMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, map: gridTexture, roughness: 0.95 });
+const offTrackColor = new THREE.Color(0x7d8a6a);
+const trackColor = new THREE.Color(0x9a7650);
+const raisedDirtColor = new THREE.Color(0xc28a4a); // jumps and berms
+const edgeMarkerMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
+let terrainMesh: THREE.Mesh | undefined;
+const edgeMarkers = new THREE.Group();
+scene.add(edgeMarkers);
+
+// One mesh from the same heights the physics uses. Rebuilt when a new layout is loaded.
+function buildTerrainMesh() {
+  if (terrainMesh) {
+    scene.remove(terrainMesh);
+    terrainMesh.geometry.dispose();
+  }
+  const pointsPerSide = cellsPerSide + 1;
+  const positions = new Float32Array(pointsPerSide * pointsPerSide * 3);
+  const colors = new Float32Array(pointsPerSide * pointsPerSide * 3);
+  const uvs = new Float32Array(pointsPerSide * pointsPerSide * 2);
+  const color = new THREE.Color();
+  for (let xIndex = 0; xIndex <= cellsPerSide; xIndex++) {
+    for (let zIndex = 0; zIndex <= cellsPerSide; zIndex++) {
+      // Same layout as the physics heights: index = zIndex + xIndex * pointsPerSide
+      const pointIndex = zIndex + xIndex * pointsPerSide;
+      const x = xIndex * cellSize - mapSize / 2;
+      const z = zIndex * cellSize - mapSize / 2;
+      const height = track.heights[pointIndex];
+      positions.set([x, height, z], pointIndex * 3);
+      uvs.set([x / 2, z / 2], pointIndex * 2);
+      color.copy(offTrackColor).lerp(trackColor, track.onTrack[pointIndex]);
+      color.lerp(raisedDirtColor, Math.min(1, height / 1.2) * Math.max(track.onTrack[pointIndex], 0.6));
+      colors.set([color.r, color.g, color.b], pointIndex * 3);
+    }
+  }
+  const indices = new Uint32Array(cellsPerSide * cellsPerSide * 6);
+  let write = 0;
+  for (let xIndex = 0; xIndex < cellsPerSide; xIndex++) {
+    for (let zIndex = 0; zIndex < cellsPerSide; zIndex++) {
+      const a = zIndex + xIndex * pointsPerSide;
+      const b = a + pointsPerSide; // next x
+      const c = a + 1; // next z
+      const d = b + 1;
+      indices.set([a, c, b, b, c, d], write);
+      write += 6;
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  geometry.computeVertexNormals();
+  terrainMesh = new THREE.Mesh(geometry, terrainMaterial);
+  terrainMesh.receiveShadow = true;
+  terrainMesh.castShadow = true;
+  scene.add(terrainMesh);
+
+  // White strips across the track mark every lip and knuckle so takeoffs and landings are easy to judge
+  for (const marker of [...edgeMarkers.children]) {
+    edgeMarkers.remove(marker);
+    (marker as THREE.Mesh).geometry.dispose();
+  }
+  const sampleCount = track.centerlineX.length;
+  for (const jump of track.jumps) {
+    jump.edges.forEach((edge, edgeIndex) => {
+      const sample = Math.round((jump.start + edge) / centerlineSpacing) % sampleCount;
+      const marker = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.04, trackHalfWidth * 2), edgeMarkerMaterial);
+      marker.position.set(track.centerlineX[sample], jump.edgeHeights[edgeIndex] + 0.02, track.centerlineZ[sample]);
+      marker.rotation.y = Math.atan2(-track.tangentZ[sample], track.tangentX[sample]);
+      edgeMarkers.add(marker);
+    });
+  }
 }
+buildTerrainMesh();
+let builtTrackVersion = state.trackVersion;
 
 // bikeGroup follows the physics body. leanPivot sits on the ground contact line and rolls for the lean
 // (simulated separately from the upright physics chassis), and leanedBikeGroup shifts the meshes back up
@@ -197,6 +259,15 @@ landingFolder.add(settings, 'landingImpactCrashSpeed', 0, 30, 0.1).name('impact 
 landingFolder.add(settings, 'bobbleSpeedLoss', 0, 1, 0.01).name('bobble speed loss');
 landingFolder.add(settings, 'bobbleSeconds', 0, 3, 0.05).name('bobble duration');
 landingFolder.add(settings, 'crashRespawnSeconds', 0.5, 10, 0.1).name('crash respawn time');
+const trackFolder = gui.addFolder('Track');
+const layoutController = trackFolder
+  .add(settings, 'trackSeed', 1, 999999, 1)
+  .name('layout number')
+  .onFinishChange((seed: number) => loadTrack(Math.round(seed)));
+trackFolder
+  .add({ newLayout: () => loadTrack(1 + Math.floor(Math.random() * 999999)) }, 'newLayout')
+  .name('new random layout');
+trackFolder.add({ restart: () => resetBike() }, 'restart').name('back to the start (A button)');
 const copyButton = gui
   .add(
     {
@@ -254,7 +325,7 @@ function readGamepad() {
 // ---------- Main loop ----------
 
 const worldUp = new THREE.Vector3(0, 1, 0);
-const previousBikePosition = new THREE.Vector3().copy(spawnPosition);
+const previousBikePosition = new THREE.Vector3();
 const previousBikeQuaternion = new THREE.Quaternion();
 const currentBikePosition = new THREE.Vector3();
 const currentBikeQuaternion = new THREE.Quaternion();
@@ -295,7 +366,7 @@ function updateCamera(frameSeconds: number, snapCamera: boolean) {
     camera.position.lerp(cameraDesiredPosition, positionBlend);
     cameraLookTarget.lerp(cameraDesiredLookTarget, lookBlend);
   }
-  camera.position.y = Math.max(camera.position.y, 0.3);
+  camera.position.y = Math.max(camera.position.y, track.heightAt(camera.position.x, camera.position.z) + 0.5);
   camera.lookAt(cameraLookTarget);
 }
 
@@ -347,7 +418,20 @@ function updateHud(frameSeconds: number) {
   const noseUpDegrees = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(hudForwardAxis.set(1, 0, 0).applyQuaternion(bikeGroup.quaternion).y, -1, 1)));
   const toDegrees = (radians: number) => THREE.MathUtils.radToDeg(radians).toFixed(0);
   const lastJump = state.lastJump;
+  // The next feature down the track and the speed it's built for
+  const bikePosition = chassisBody.translation();
+  const distanceAlong = track.nearestCenterlineIndex(bikePosition.x, bikePosition.z) * centerlineSpacing;
+  let nextJumpText = '';
+  let nearestAhead = Infinity;
+  for (const jump of track.jumps) {
+    const ahead = (jump.start - distanceAlong + track.length) % track.length;
+    if (ahead < nearestAhead) {
+      nearestAhead = ahead;
+      nextJumpText = `next: ${jump.kind} in ${ahead.toFixed(0)} m, built for ${(jump.designSpeed * 3.6).toFixed(0)} km/h`;
+    }
+  }
   hudElement.textContent =
+    `layout ${settings.trackSeed}   ground bank ${toDegrees(Math.abs(state.groundBankRadians))}°   ${nextJumpText}\n` +
     `${speedKilometersPerHour.toFixed(0)} km/h   pitch ${noseUpDegrees.toFixed(0)}°   ` +
     `rear wheel ${(state.wheelSpinRates[rearWheelIndex] * wheelRadius * 3.6).toFixed(0)} km/h   ` +
     `front ${frontContact}   rear ${rearContact}\n` +
@@ -377,6 +461,12 @@ function frame(now: number) {
     previousBikeQuaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
     physicsStep();
     physicsTimeAccumulator -= physicsTimestep;
+  }
+
+  if (state.trackVersion !== builtTrackVersion) {
+    buildTerrainMesh();
+    builtTrackVersion = state.trackVersion;
+    layoutController.updateDisplay();
   }
 
   // After a reset (button or crash respawn) don't blend from the old spot, and jump the camera there

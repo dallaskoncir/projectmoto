@@ -1,12 +1,13 @@
 // Bike physics, track and riding rules. No rendering or browser code, so it also runs headless in Node.
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
+import { buildTrack, cellsPerSide, centerlineSpacing, mapSize, type Track } from './track.ts';
 
 // Every value that affects feel. Edited live by the panel; "copy settings" exports this as JSON.
 export const settings = {
   suspensionStiffness: 55, // Rapier scales this by bike mass, so sag stays the same if mass changes
-  suspensionCompressionDamping: 5,
-  suspensionReboundDamping: 7,
+  suspensionCompressionDamping: 8,
+  suspensionReboundDamping: 10,
   suspensionTravel: 0.3,
   suspensionRestLength: 0.35,
 
@@ -55,6 +56,8 @@ export const settings = {
   centerOfMassHeight: -0.15, // relative to the chassis box center; lower = harder to wheelie or loop
   gravity: 9.81,
 
+  trackSeed: 1, // layout number for the randomized jumps; the big double and the corners are always the same
+
   cameraDistance: 6,
   cameraHeight: 2.2,
   cameraSmoothing: 6,
@@ -68,9 +71,9 @@ export const settings = {
   landingSidewaysCrashDegrees: 45,
   landingPitchBobbleDegrees: 30, // bike angle against the landing surface (nose too high or too low)
   landingPitchCrashDegrees: 60,
-  landingImpactBobbleSpeed: 5, // meters per second into the landing surface
-  landingImpactCrashSpeed: 11,
-  bobbleSpeedLoss: 0.35, // share of speed lost by the worst bobble
+  landingImpactBobbleSpeed: 7, // meters per second into the landing surface
+  landingImpactCrashSpeed: 14,
+  bobbleSpeedLoss: 0.2, // share of speed lost by the worst bobble
   bobbleSeconds: 0.8,
   crashRespawnSeconds: 2.5,
 };
@@ -87,7 +90,6 @@ export const controls = {
 await RAPIER.init();
 
 export const physicsTimestep = 1 / 120;
-export const spawnPosition = { x: -60, y: 1, z: 0 };
 export const chassisHalfLength = 0.7;
 export const chassisHalfHeight = 0.25;
 export const chassisHalfWidth = 0.2;
@@ -108,60 +110,34 @@ export const frontWheelIndex = 1;
 export const world = new RAPIER.World({ x: 0, y: -settings.gravity, z: 0 });
 world.timestep = physicsTimestep;
 
-const groundCollider = world.createCollider(RAPIER.ColliderDesc.cuboid(100, 0.5, 100).setTranslation(0, -0.5, 0));
+// The track is one heightfield (see track.ts). A new layout replaces it; trackVersion tells the renderer.
+export let track: Track = buildTrack(settings.trackSeed);
+let terrainCollider = createTerrainCollider(track);
 
-// Tabletop jump, 25 m ahead of spawn. The takeoff is a circular arc that starts level with the ground and
-// curves up to the lip angle, like a real MX face. Then a flat deck at lip height and a downslope landing.
-// Sized so full throttle overjumps onto the flat unless you scrub; 70-85% throttle lands without scrubbing.
-const rampStartX = -35;
-export const rampWidth = 5;
-const takeoffLipAngleDegrees = 27;
-export const takeoffHeight = 2.2;
-const deckLength = 14;
-const landingAngleDegrees = 18;
-const takeoffLipAngle = THREE.MathUtils.degToRad(takeoffLipAngleDegrees);
-const takeoffArcRadius = takeoffHeight / (1 - Math.cos(takeoffLipAngle));
-const takeoffArcSegments = 24;
+function createTerrainCollider(newTrack: Track) {
+  return world.createCollider(
+    RAPIER.ColliderDesc.heightfield(
+      cellsPerSide,
+      cellsPerSide,
+      newTrack.heights,
+      { x: mapSize, y: 1, z: mapSize },
+      RAPIER.HeightFieldFlags.FIX_INTERNAL_EDGES, // no phantom bumps at the seams between triangles
+    ),
+  );
+}
 
-// Side profile of the jump as (x, height) points from the start of the takeoff to the end of the landing
-const rampProfile: [number, number][] = [];
-for (let segmentIndex = 0; segmentIndex <= takeoffArcSegments; segmentIndex++) {
-  const arcAngle = (takeoffLipAngle * segmentIndex) / takeoffArcSegments;
-  rampProfile.push([rampStartX + takeoffArcRadius * Math.sin(arcAngle), takeoffArcRadius * (1 - Math.cos(arcAngle))]);
+export function loadTrack(seed: number, withJumps = true) {
+  settings.trackSeed = seed;
+  world.removeCollider(terrainCollider, false);
+  track = buildTrack(seed, withJumps);
+  terrainCollider = createTerrainCollider(track);
+  state.trackVersion++;
+  resetBike();
 }
-export const lipX = rampProfile[rampProfile.length - 1][0];
-export const knuckleX = lipX + deckLength;
-const landingEndX = knuckleX + takeoffHeight / Math.tan(THREE.MathUtils.degToRad(landingAngleDegrees));
-rampProfile.push([knuckleX, takeoffHeight], [landingEndX, 0]);
-
-// Extrude the profile across the ramp width: a top surface plus side walls down to the ground.
-// One triangle mesh serves both physics and rendering, because the curved face isn't convex.
-export const rampVertices: number[] = [];
-export const rampTriangleIndices: number[] = [];
-function addRampQuad(corners: [number, number, number][]) {
-  const firstIndex = rampVertices.length / 3;
-  for (const corner of corners) rampVertices.push(...corner);
-  rampTriangleIndices.push(firstIndex, firstIndex + 1, firstIndex + 2, firstIndex, firstIndex + 2, firstIndex + 3);
-}
-for (let pointIndex = 0; pointIndex < rampProfile.length - 1; pointIndex++) {
-  const [startX, startHeight] = rampProfile[pointIndex];
-  const [endX, endHeight] = rampProfile[pointIndex + 1];
-  addRampQuad([[startX, startHeight, -rampWidth / 2], [endX, endHeight, -rampWidth / 2], [endX, endHeight, rampWidth / 2], [startX, startHeight, rampWidth / 2]]);
-  for (const sideZ of [-rampWidth / 2, rampWidth / 2]) {
-    addRampQuad([[startX, 0, sideZ], [endX, 0, sideZ], [endX, endHeight, sideZ], [startX, startHeight, sideZ]]);
-  }
-}
-const rampCollider = world.createCollider(
-  RAPIER.ColliderDesc.trimesh(
-    new Float32Array(rampVertices),
-    new Uint32Array(rampTriangleIndices),
-    RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES, // smooth over the seams between triangles on the curve
-  ),
-);
 
 // Chassis: bike local axes are +X forward, +Y up, +Z to the rider's right
 export const chassisBody = world.createRigidBody(
-  RAPIER.RigidBodyDesc.dynamic().setTranslation(spawnPosition.x, spawnPosition.y, spawnPosition.z).setCanSleep(false),
+  RAPIER.RigidBodyDesc.dynamic().setCanSleep(false),
 );
 const chassisCollider = world.createCollider(
   RAPIER.ColliderDesc.cuboid(chassisHalfLength, chassisHalfHeight, chassisHalfWidth).setFriction(0.5),
@@ -208,10 +184,13 @@ export const state = {
   bikePressAmount: 0, // -1..1, how hard the rider is laying the bike over (positive = to the right), follows the right stick
   handlebarRadians: 0, // positive = bars turned right
   lateralAcceleration: 0, // m/s^2 toward the bike's right, smoothed
+  verticalSupport: 9.81, // gravity plus the bike's upward acceleration (m/s^2), smoothed: how hard the ground is pushing up
+  groundBankRadians: 0, // how the ground under the wheels is banked, positive = holds a right-hand turn
   wobbleRadians: 0, // visual shake during a bobble
   isInAir: false,
   crashTimeRemaining: 0,
   resetCount: 0, // goes up on every reset so the camera knows to snap
+  trackVersion: 0, // goes up when a new track layout is loaded
   wheelSpinRates: [0, 0], // radians per second, positive when rolling forward
   wheelSpinAngles: [0, 0],
   lastJump: { distance: 0, airTime: 0, scrubPercent: 0, landingLoad: 0, result: '' },
@@ -249,14 +228,31 @@ function showStatus(message: string, seconds: number) {
   state.statusTimeRemaining = seconds;
 }
 
-export function resetBike() {
+// Puts the bike on the track, pointing the way the track runs: at the start, or (after a crash) at the
+// centerline a few meters back from a given spot
+export function resetBike(nearX?: number, nearZ?: number) {
   contactsAreStale = true;
   state.crashTimeRemaining = 0;
   bobbleTimeRemaining = 0;
   wasInAir = false;
   state.statusTimeRemaining = 0;
-  chassisBody.setTranslation(spawnPosition, true);
-  chassisBody.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+  const sampleCount = track.centerlineX.length;
+  const backUpSamples = 16; // 8 m
+  let spawnIndex =
+    nearX === undefined || nearZ === undefined
+      ? track.spawnIndex
+      : (track.nearestCenterlineIndex(nearX, nearZ) - backUpSamples + sampleCount) % sampleCount;
+  // Never on a jump with no speed: if that spot is on one (or just before it), go to just past its landing
+  for (const jump of track.jumps) {
+    const intoJump = (spawnIndex * centerlineSpacing - (jump.start - 5) + track.length) % track.length;
+    if (intoJump < jump.length + 5) spawnIndex = Math.round((jump.start + jump.length + 3) / centerlineSpacing) % sampleCount;
+  }
+  const spawnX = track.centerlineX[spawnIndex];
+  const spawnZ = track.centerlineZ[spawnIndex];
+  chassisBody.setTranslation({ x: spawnX, y: track.heightAt(spawnX, spawnZ) + 1, z: spawnZ }, true);
+  // Turn the bike's +X onto the track direction: a yaw of atan2(-tz, tx) around +Y
+  const yaw = Math.atan2(-track.tangentZ[spawnIndex], track.tangentX[spawnIndex]);
+  chassisBody.setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) }, true);
   chassisBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
   chassisBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
   previousVelocity.set(0, 0, 0);
@@ -265,6 +261,8 @@ export function resetBike() {
   state.bodyLeanRadians = 0;
   state.bodyLeanRate = 0;
   state.lateralAcceleration = 0;
+  state.verticalSupport = settings.gravity;
+  state.groundBankRadians = 0;
   state.wheelSpinRates.fill(0);
   state.resetCount++;
 }
@@ -285,14 +283,12 @@ function yawFromTravelRadians() {
 
 function chassisTouchesGround() {
   let isTouching = false;
-  for (const surfaceCollider of [groundCollider, rampCollider]) {
-    world.contactPair(chassisCollider, surfaceCollider, (manifold) => {
-      // Rapier also reports predicted contacts a few centimeters away, so only count real touches
-      for (let contactIndex = 0; contactIndex < manifold.numContacts(); contactIndex++) {
-        if (manifold.contactDist(contactIndex) <= 0.005) isTouching = true;
-      }
-    });
-  }
+  world.contactPair(chassisCollider, terrainCollider, (manifold) => {
+    // Rapier also reports predicted contacts a few centimeters away, so only count real touches
+    for (let contactIndex = 0; contactIndex < manifold.numContacts(); contactIndex++) {
+      if (manifold.contactDist(contactIndex) <= 0.005) isTouching = true;
+    }
+  });
   return isTouching;
 }
 
@@ -356,10 +352,50 @@ function judgeLanding() {
   }
 }
 
+// How the ground under the wheels is banked across the bike, positive when it tilts to hold a right-hand
+// turn (the surface rises to the bike's left)
+function groundBankRadians() {
+  let bankSum = 0;
+  let wheelsDown = 0;
+  for (const wheelIndex of [rearWheelIndex, frontWheelIndex]) {
+    const normal = vehicle.wheelIsInContact(wheelIndex) ? vehicle.wheelContactNormal(wheelIndex) : null;
+    if (!normal) continue;
+    bankSum += Math.asin(THREE.MathUtils.clamp(normal.x * flatSideAxis.x + normal.z * flatSideAxis.z, -1, 1));
+    wheelsDown++;
+  }
+  return wheelsDown > 0 ? bankSum / wheelsDown : 0;
+}
+
+// The rider feels the bank through the bike over a moment, not wheel by wheel as they skip over the berm's
+// curved face, so smooth it (about 0.15 s)
+function smoothGroundBank() {
+  state.groundBankRadians += (groundBankRadians() - state.groundBankRadians) * (1 - Math.exp(-physicsTimestep / 0.15));
+  return state.groundBankRadians;
+}
+
+// Rapier's wheels push the bike straight up the suspension even on a slope. Real ground pushes along its
+// surface normal, so on a bank part of that push is sideways, into the turn: add it. (Only across the
+// bike; fore and aft is left alone so jump faces keep the takeoffs they were tuned with.)
+function applyGroundSidePush() {
+  for (const wheelIndex of [rearWheelIndex, frontWheelIndex]) {
+    const normal = vehicle.wheelIsInContact(wheelIndex) ? vehicle.wheelContactNormal(wheelIndex) : null;
+    if (!normal) continue;
+    const suspensionForce = vehicle.wheelSuspensionForce(wheelIndex) ?? 0;
+    const across = normal.x * flatSideAxis.x + normal.z * flatSideAxis.z;
+    // The suspension force holds up the vertical part of the normal push; the sideways part is that times
+    // the slope across the bike
+    const sidewaysImpulse = ((suspensionForce * across) / Math.max(normal.y, 0.5)) * physicsTimestep;
+    chassisBody.applyImpulse({ x: flatSideAxis.x * sidewaysImpulse, y: 0, z: flatSideAxis.z * sidewaysImpulse }, true);
+  }
+}
+
 // The rider's balance on the ground: turn the left stick into a handlebar angle, and move the
 // bike-and-rider lean by what the tires actually did. Returns the steering angle on the ground, positive right.
-function balanceAndSteer(forwardSpeed: number) {
+function balanceAndSteer(forwardSpeed: number, groundBank: number) {
   const gravity = settings.gravity;
+  // What the lean balances against is the ground's push, not gravity on its own: light over a bump the
+  // bike barely tips, compressed into a berm or a landing it's held up harder
+  const support = state.verticalSupport;
   const pendulumHeight = settings.leanPendulumHeight;
   const bodyLean = state.bodyLeanRadians;
 
@@ -377,7 +413,13 @@ function balanceAndSteer(forwardSpeed: number) {
   const lockLimitedLean = Math.atan((speedSquared * Math.tan(groundSteeringLock)) / (wheelbase * gravity));
   // Pressing the bike into the turn (right stick the same way as the left) lets the rider lean further
   const pressIntoStick = Math.max(0, state.bikePressAmount * Math.sign(controls.steering));
-  const stickLean = settings.maxLeanAngleDegrees + settings.pressExtraLeanDegrees * pressIntoStick;
+  // A berm banked into the turn lets the rider lean further over (relative to the ground it's the same lean)
+  const turnSide = Math.sign(controls.steering) || Math.sign(bodyLean);
+  const bankIntoTurn = groundBank * turnSide;
+  const stickLean = Math.min(
+    62,
+    settings.maxLeanAngleDegrees + settings.pressExtraLeanDegrees * pressIntoStick + THREE.MathUtils.radToDeg(Math.max(0, bankIntoTurn)),
+  );
   // Nor more than the dirt can hold. Holding a lean takes g*tan(lean) of sideways force, which the bike's
   // geometry splits between the tires by where the center of mass sits, so whichever tire runs out first
   // sets the limit. Each tire's grip grows with the load on it, so the rider's weight matters: forward
@@ -392,8 +434,12 @@ function balanceAndSteer(forwardSpeed: number) {
   const sidewaysGripLeft = (grip: number, pull: number) => Math.sqrt(Math.max(0, (grip * pressedGrip) ** 2 - pull * pull));
   const frontCorneringGrip = (sidewaysGripLeft(settings.frontGrip, frontPull) * frontLoad) / (frontCorneringShare * totalWeight);
   const rearCorneringGrip = (sidewaysGripLeft(settings.rearGrip, rearPull) * rearLoad) / (rearCorneringShare * totalWeight);
-  const corneringGrip = Math.min(frontCorneringGrip, rearCorneringGrip);
-  const gripLimitedLean = Math.atan(0.75 * corneringGrip);
+  const flatCorneringGrip = Math.min(frontCorneringGrip, rearCorneringGrip);
+  // On a bank the ground itself pushes the bike into the turn by tan(bank) of its weight, on top of the
+  // tires' grip. Off-camber (negative bank) takes it away.
+  const corneringGrip = Math.max(0, flatCorneringGrip + Math.tan(bankIntoTurn));
+  // Keep a quarter of the tires' grip in reserve (front slip, a little throttle); the berm's push is solid
+  const gripLimitedLean = Math.atan(Math.max(0, 0.75 * flatCorneringGrip + Math.tan(bankIntoTurn)));
   const reachableLean = Math.min(THREE.MathUtils.degToRad(stickLean), 0.9 * lockLimitedLean, gripLimitedLean);
   const targetBodyLean = controls.steering * reachableLean;
 
@@ -402,7 +448,7 @@ function balanceAndSteer(forwardSpeed: number) {
   // wrong way first, which is countersteering.
   const response = settings.leanResponse;
   const desiredLeanAcceleration = response * response * (targetBodyLean - bodyLean) - 2 * response * state.bodyLeanRate;
-  let neededLateralAcceleration = (gravity * Math.sin(bodyLean) - pendulumHeight * desiredLeanAcceleration) / Math.cos(bodyLean);
+  let neededLateralAcceleration = (support * Math.sin(bodyLean) - pendulumHeight * desiredLeanAcceleration) / Math.cos(bodyLean);
 
   // At low speed a pure countersteer would need the bars at full lock the wrong way, and the bike would
   // visibly swerve out of the turn. Cap the push away from the side the bike is leaning (or about to lean)
@@ -412,7 +458,7 @@ function balanceAndSteer(forwardSpeed: number) {
   const countersteerLimit = settings.countersteerLimitG * gravity;
   if (neededLateralAcceleration * leanSide < -countersteerLimit) {
     neededLateralAcceleration = -leanSide * countersteerLimit;
-    const tireLeanAcceleration = (gravity * Math.sin(bodyLean) - neededLateralAcceleration * Math.cos(bodyLean)) / pendulumHeight;
+    const tireLeanAcceleration = (support * Math.sin(bodyLean) - neededLateralAcceleration * Math.cos(bodyLean)) / pendulumHeight;
     riderLeanAcceleration = THREE.MathUtils.clamp(
       desiredLeanAcceleration - tireLeanAcceleration,
       -settings.riderLeanInitiation,
@@ -435,13 +481,16 @@ function balanceAndSteer(forwardSpeed: number) {
   // Move the lean: gravity against what the tires really delivered. If they slide, the lean falls in.
   // With a foot down the lean is just held near upright.
   const pendulumLeanAcceleration =
-    (gravity * Math.sin(bodyLean) - state.lateralAcceleration * Math.cos(bodyLean)) / pendulumHeight + riderLeanAcceleration;
+    (support * Math.sin(bodyLean) - state.lateralAcceleration * Math.cos(bodyLean)) / pendulumHeight + riderLeanAcceleration;
   const feetDownLeanAcceleration = -response * response * bodyLean - 2 * response * state.bodyLeanRate;
   let leanAcceleration = THREE.MathUtils.lerp(feetDownLeanAcceleration, pendulumLeanAcceleration, balanceWeight);
 
-  // Rider save: when the tires can't hold the lean, easing off the stick lets the rider get a leg out and
-  // catch the bike, with limited strength. Keep asking for the lean and nothing saves it.
-  const isEasingOff = controls.steering * Math.sign(bodyLean) < 0.95;
+  // Rider save: when the bike is leaned further than the rider wants (they eased off the stick, or the
+  // ground stopped holding that much lean: off the end of a berm, gas on, a light front) and the tires can't
+  // stand it up, the rider gets a leg out and catches it, with limited strength. Pushing for full lean
+  // right at the limit isn't saved, and a big enough overload is more than the rider can catch.
+  const isEasingOff =
+    controls.steering * Math.sign(bodyLean) < 0.95 || Math.abs(targetBodyLean) < Math.abs(bodyLean) - THREE.MathUtils.degToRad(4);
   const fallingInBeyondWanted = (leanAcceleration - desiredLeanAcceleration) * Math.sign(bodyLean);
   if (isEasingOff && fallingInBeyondWanted > 0) {
     leanAcceleration -= Math.sign(bodyLean) * balanceWeight * Math.min(settings.riderSaveStrength, fallingInBeyondWanted);
@@ -461,7 +510,7 @@ function balanceAndSteer(forwardSpeed: number) {
   state.bodyLeanRadians += state.bodyLeanRate * physicsTimestep;
 
   state.handlebarRadians = Math.atan(Math.tan(groundSteering) * bikeLeanCosine);
-  return { groundSteering, balanceWeight, footWeight };
+  return { groundSteering, balanceWeight, footWeight, bankIntoTurn };
 }
 
 export function physicsStep() {
@@ -482,6 +531,8 @@ export function physicsStep() {
       ((velocity.x - previousVelocity.x) * flatSideAxis.x + (velocity.z - previousVelocity.z) * flatSideAxis.z) / physicsTimestep;
     state.lateralAcceleration += (measuredLateralAcceleration - state.lateralAcceleration) * (1 - Math.exp(-physicsTimestep / 0.02));
   }
+  const measuredSupport = THREE.MathUtils.clamp(settings.gravity + (velocity.y - previousVelocity.y) / physicsTimestep, 0, 3 * settings.gravity);
+  state.verticalSupport += (measuredSupport - state.verticalSupport) * (1 - Math.exp(-physicsTimestep / 0.04));
   previousVelocity.set(velocity.x, velocity.y, velocity.z);
   for (const wheelIndex of [rearWheelIndex, frontWheelIndex]) {
     const load = vehicle.wheelIsInContact(wheelIndex) ? (vehicle.wheelSuspensionForce(wheelIndex) ?? 0) : 0;
@@ -499,7 +550,10 @@ export function physicsStep() {
     vehicle.updateVehicle(physicsTimestep);
     world.step();
     state.crashTimeRemaining -= physicsTimestep;
-    if (state.crashTimeRemaining <= 0) resetBike();
+    if (state.crashTimeRemaining <= 0) {
+      const crashPosition = chassisBody.translation();
+      resetBike(crashPosition.x, crashPosition.z);
+    }
     return;
   }
 
@@ -562,12 +616,13 @@ export function physicsStep() {
     state.handlebarRadians = 0;
     vehicle.setWheelSteering(frontWheelIndex, 0);
   } else {
-    const { groundSteering, balanceWeight, footWeight } = balanceAndSteer(forwardSpeed);
+    const { groundSteering, balanceWeight, footWeight, bankIntoTurn } = balanceAndSteer(forwardSpeed, smoothGroundBank());
     // Positive Rapier steering turns left
     vehicle.setWheelSteering(frontWheelIndex, -groundSteering);
     // The bike can't lie flatter than where the pegs and bars touch the ground
     state.bikeLeanRadians = THREE.MathUtils.clamp(state.bodyLeanRadians + bikePressLean, -maxBikeLean, maxBikeLean);
-    const isLowSide = Math.abs(state.bodyLeanRadians) > THREE.MathUtils.degToRad(settings.lowSideLeanDegrees);
+    const isLowSide =
+      Math.abs(state.bodyLeanRadians) > THREE.MathUtils.degToRad(settings.lowSideLeanDegrees) + Math.max(0, bankIntoTurn);
     if (balanceWeight > 0.5 && footWeight < 0.5 && isLowSide) {
       crash('low-side, leaned past what the tires could hold');
       return;
@@ -666,6 +721,9 @@ export function physicsStep() {
   chassisBody.addTorque(controlTorque, true);
 
   vehicle.updateVehicle(physicsTimestep);
+  applyGroundSidePush();
   world.step();
   contactsAreStale = false;
 }
+
+resetBike();
