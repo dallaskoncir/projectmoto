@@ -3,9 +3,9 @@
 // straights[i] runs from corner i to corner i+1. Jumps without sizes are sized for their run-up speed.
 import type { TrackDesign } from './track.ts';
 
-const motocross = { style: 'motocross', landingRoom: 8, cornerClearance: 14, maxDesignSpeed: 16, maxJumpHeight: 3 } as const;
+const motocross = { style: 'motocross', landingRoom: 8, cornerClearance: 14, maxDesignSpeed: 21, maxJumpHeight: 4.5 } as const;
 // Supercross jumps come right out of the turns and sit close together
-const supercross = { style: 'supercross', landingRoom: 4, cornerClearance: 10, maxDesignSpeed: 12, maxJumpHeight: 2.2 } as const;
+const supercross = { style: 'supercross', landingRoom: 4, cornerClearance: 10, maxDesignSpeed: 16, maxJumpHeight: 3.2 } as const;
 
 export const trackDesigns: TrackDesign[] = [
   {
@@ -26,12 +26,11 @@ export const trackDesigns: TrackDesign[] = [
     ],
     straights: [
       [
-        { kind: 'big double', takeoff: 2.6, lipDegrees: 30, gap: 21, landing: 2.6, landingDegrees: 13, runUp: 36 },
         { kind: 'tabletop' },
-        { kind: 'rollers', count: 3, height: 0.4, spacing: 6.6 },
+        { kind: 'big double', takeoff: 2.6, lipDegrees: 30, gap: 22, landing: 4.2, landingDegrees: 13, runUp: 37 },
       ],
-      [{ kind: 'rollers', count: 4, height: 0.6, spacing: 7.4 }, { kind: 'tabletop' }],
-      [{ kind: 'step-up' }],
+      [{ kind: 'rollers', count: 2, height: 0.6, spacing: 7.4 }, { kind: 'tabletop' }],
+      [{ kind: 'step-up', deck: 2.5 }],
       [{ kind: 'rollers', count: 4, height: 0.6, spacing: 7.9 }],
       [],
       [],
@@ -57,13 +56,13 @@ export const trackDesigns: TrackDesign[] = [
     ],
     straights: [
       [
-        { kind: 'tabletop' },
-        { kind: 'big double', takeoff: 2.6, lipDegrees: 30, gap: 22, landing: 2.6, landingDegrees: 13, runUp: 20 },
+        { kind: 'big double', takeoff: 2.6, lipDegrees: 30, gap: 24, landing: 4.2, landingDegrees: 13, runUp: 40 },
+        { kind: 'rollers', count: 3, height: 0.5, spacing: 7 },
       ],
       [{ kind: 'double' }],
       [],
       [],
-      [{ kind: 'step-up' }, { kind: 'rollers', count: 3, height: 0.6, spacing: 6.5 }],
+      [{ kind: 'step-up' }],
       [{ kind: 'rollers', count: 2, height: 0.5, spacing: 7 }],
       [],
       [{ kind: 'rollers', count: 5, height: 0.6, spacing: 7.5 }],
@@ -91,15 +90,15 @@ export const trackDesigns: TrackDesign[] = [
       [{ kind: 'rollers', count: 3, height: 0.5, spacing: 7 }],
       [{ kind: 'tabletop' }],
       [{ kind: 'rollers', count: 3, height: 0.5, spacing: 7 }],
-      [{ kind: 'double' }],
+      [{ kind: 'double', lipDegrees: 24, takeoff: 1.6 }],
       [],
       [{ kind: 'rollers', count: 3, height: 0.6, spacing: 7 }],
-      [{ kind: 'step-up' }],
+      [{ kind: 'step-up', deck: 3 }],
       [],
       [{ kind: 'step-up' }, { kind: 'rollers', count: 3, height: 0.5, spacing: 7 }],
       [{ kind: 'rollers', count: 3, height: 0.6, spacing: 7 }],
       [],
-      [{ kind: 'tabletop' }],
+      [{ kind: 'double' }],
     ],
   },
   {
@@ -117,7 +116,7 @@ export const trackDesigns: TrackDesign[] = [
       { x: -85, z: 18, radius: 8 },
     ],
     straights: [
-      [{ kind: 'triple', takeoff: 1.8, lipDegrees: 32, gap: 16, landing: 1.8, landingDegrees: 16, runUp: 12 }, { kind: 'tabletop' }],
+      [{ kind: 'triple', takeoff: 1.8, lipDegrees: 32, gap: 15, landing: 3.4, landingDegrees: 16, runUp: 12 }, { kind: 'tabletop' }],
       [],
       [{ kind: 'rhythm', count: 6, height: 0.7 }, { kind: 'double' }],
       [],
@@ -142,14 +141,14 @@ export const trackDesigns: TrackDesign[] = [
       { x: -80, z: 32, radius: 8 },
     ],
     straights: [
-      [{ kind: 'triple', takeoff: 1.8, lipDegrees: 32, gap: 16, landing: 1.8, landingDegrees: 16, runUp: 8 }, { kind: 'rhythm', count: 5, height: 0.7 }],
+      [{ kind: 'triple', takeoff: 1.8, lipDegrees: 32, gap: 15, landing: 3.4, landingDegrees: 16, runUp: 12 }, { kind: 'rhythm', count: 5, height: 0.7 }],
       [{ kind: 'whoops', count: 7, height: 0.45, spacing: 4.5 }],
+      [{ kind: 'rhythm', count: 3, height: 0.7 }],
+      [],
+      [],
+      [],
+      [],
       [{ kind: 'double' }],
-      [],
-      [],
-      [],
-      [],
-      [{ kind: 'tabletop' }],
     ],
   },
   {
@@ -171,11 +170,11 @@ export const trackDesigns: TrackDesign[] = [
     straights: [
       [{ kind: 'rhythm', count: 5, height: 0.7 }, { kind: 'tabletop' }],
       [],
-      [{ kind: 'tabletop' }],
+      [{ kind: 'rollers', count: 3, height: 0.6, spacing: 6.5 }],
       [],
       [],
       [],
-      [{ kind: 'triple', takeoff: 1.8, lipDegrees: 32, gap: 16, landing: 1.8, landingDegrees: 16, runUp: 10 }, { kind: 'rhythm', count: 4, height: 0.7 }],
+      [{ kind: 'triple', takeoff: 1.8, lipDegrees: 32, gap: 15, landing: 3.4, landingDegrees: 16, runUp: 20 }, { kind: 'rhythm', count: 4, height: 0.7 }],
       [{ kind: 'whoops', count: 10, height: 0.45, spacing: 4.5 }],
       [{ kind: 'step-up' }, { kind: 'double' }, { kind: 'tabletop' }],
       [],

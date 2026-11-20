@@ -21,8 +21,8 @@ browser's "standard" mapping are used, so wheels and pedals are ignored.
 | Input | Action |
 | --- | --- |
 | RT | Throttle |
-| LT | Front brake |
-| RB | Rear brake (builds up while held) |
+| LT | Brakes, both wheels together (75% front by default) |
+| RB | Rear brake on its own (builds up while held), when combined brakes are switched off in the Brakes panel |
 | Left stick | Lean the bike and rider into a turn. The rider countersteers to get there. |
 | Right stick left/right | Move the rider's body that way, and the bike goes over the other way: stand it up or press it down in a turn, scrub off a lip, whip in the air |
 | Right stick up/down | Rider forward/back: weight shift on the ground, pitch in the air |

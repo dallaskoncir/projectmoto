@@ -1,7 +1,7 @@
 // Bike physics, track and riding rules. No rendering or browser code, so it also runs headless in Node.
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { buildTrack, cellsPerSide, centerlineSpacing, mapSize, type Track } from './track.ts';
+import { buildTrack, cellsPerSide, centerlineSpacing, mapSize, speedAfterRunUp, type Track } from './track.ts';
 import { trackDesigns } from './trackDesigns.ts';
 
 // Every value that affects feel. Edited live by the panel; "copy settings" exports this as JSON.
@@ -21,7 +21,7 @@ export const settings = {
   rearBrakeForce: 1000, // newtons at full rear brake
   rearBrakeButtonStrength: 0.5, // share of the rear brake force RB holds: a drag, not a stomp
   rearBrakeRampSeconds: 0.25, // how long RB takes to build to its full strength
-  combinedBrakes: false,
+  combinedBrakes: true,
   combinedFrontShare: 0.75, // front/rear balance when combined; the wheel with more brake gets all of LT
   lockedTireGrip: 0.8, // share of its grip a locked tire drags with; ease the brake under this to unlock it
   lockedTireSideGrip: 0.5, // share of its sideways grip a locked tire keeps (knobs plowing the dirt)
@@ -252,6 +252,8 @@ function showStatus(message: string, seconds: number) {
 
 // Puts the bike on the track, pointing the way the track runs: at the start, or (after a crash) at the
 // centerline a few meters back from a given spot
+const gapJumpKinds = new Set(['double', 'triple', 'big double', 'step-up']);
+
 export function resetBike(nearX?: number, nearZ?: number) {
   contactsAreStale = true;
   state.crashTimeRemaining = 0;
@@ -268,6 +270,17 @@ export function resetBike(nearX?: number, nearZ?: number) {
   for (const jump of track.jumps) {
     const intoJump = (spawnIndex * centerlineSpacing - (jump.start - 5) + track.length) % track.length;
     if (intoJump < jump.length + 5) spawnIndex = Math.round((jump.start + jump.length + 3) / centerlineSpacing) % sampleCount;
+  }
+  // Nor in front of a gap that can't be cleared from a standstill: start past its landing instead. The
+  // estimate from rest is cut by 12 m for dropping in, settling and climbing the face.
+  for (let pass = 0; pass < 3; pass++) {
+    for (const jump of track.jumps) {
+      if (!gapJumpKinds.has(jump.kind)) continue;
+      const toLip = (jump.start + jump.edges[0] - spawnIndex * centerlineSpacing + track.length) % track.length;
+      if (toLip < 80 && speedAfterRunUp(Math.max(0, toLip - 12), 3) < jump.designSpeed * 0.95) {
+        spawnIndex = Math.round((jump.start + jump.length + 3) / centerlineSpacing) % sampleCount;
+      }
+    }
   }
   const spawnX = track.centerlineX[spawnIndex];
   const spawnZ = track.centerlineZ[spawnIndex];

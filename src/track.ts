@@ -184,9 +184,9 @@ function landingHeightFor(designSpeed: number, lipAngle: number, takeoffHeight: 
   return height;
 }
 
-// Rough top speed the bike can reach over a run-up, starting from corner-exit speed. Matches the engine
-// (force fading to zero at top speed) with some margin for the rider not being flat out.
-function speedAfterRunUp(distance: number, startSpeed = 8, engineAcceleration = 7, topSpeed = 25) {
+// Rough speed the bike reaches over a run-up on full throttle, starting from corner-exit speed. Matches the
+// engine (force fading to zero at top speed), a little under what the bike really does flat out.
+export function speedAfterRunUp(distance: number, startSpeed = 8, engineAcceleration = 7, topSpeed = 25) {
   let speed = startSpeed;
   for (let traveled = 0; traveled < distance; traveled += 0.5) {
     speed += ((engineAcceleration * (1 - speed / topSpeed)) / speed) * 0.5;
@@ -440,14 +440,34 @@ function measureCorners(tangentX: Float32Array, tangentZ: Float32Array) {
   return { cornerStrength: eased, turnDirection };
 }
 
-// Speed a rider carries out of a corner of this radius, roughly
-function cornerExitSpeed(radius: number) {
-  return Math.min(8.5, Math.max(5, Math.sqrt(radius * 9.81 * 0.8)));
+// Speed a fast rider carries out of a corner, roughly. A gentle bend can be straightened by using the
+// width of the track, so the line's radius grows as the turn gets smaller; sweepers are taken nearly flat out.
+// Corners the same way with only a short straight between (two 90s making a 180) count as one turn.
+function cornerExitSpeed(corners: TrackDesign['corners'], index: number) {
+  const count = corners.length;
+  const at = (i: number) => corners[((i % count) + count) % count];
+  const signedTurn = (i: number) => {
+    const before = at(i - 1), corner = at(i), after = at(i + 1);
+    const inX = corner.x - before.x, inZ = corner.z - before.z, outX = after.x - corner.x, outZ = after.z - corner.z;
+    return Math.atan2(inX * outZ - inZ * outX, inX * outX + inZ * outZ);
+  };
+  let turn = signedTurn(index);
+  let radius = at(index).radius;
+  for (let back = 1; back < count; back++) {
+    const previous = at(index - back), next = at(index - back + 1);
+    const between = Math.hypot(next.x - previous.x, next.z - previous.z) - previous.radius - next.radius;
+    const previousTurn = signedTurn(index - back);
+    if (between > 20 || Math.sign(previousTurn) !== Math.sign(turn)) break;
+    turn += previousTurn;
+    radius = Math.min(radius, previous.radius);
+  }
+  const lineRadius = radius + (trackHalfWidth * 0.75) / Math.max(0.05, 1 - Math.cos(Math.min(Math.PI, Math.abs(turn)) / 2));
+  return Math.min(18, Math.sqrt(lineRadius * 9.81 * 0.85));
 }
 
-// Lays each straight's features out in order from the corner, each sized for the speed its run-up gives
-// at a steady (not flat-out) throttle: at that speed it lands just past the knuckle, slower lands on the
-// deck or short, faster lands further down a landing long enough for about 25% more speed.
+// Lays each straight's features out in order from the corner, each sized for the speed a fast rider has
+// at its lip on full throttle out of the corner. At that speed a scrubbed jump reaches the knuckle and an
+// unscrubbed one lands down the landing, which is long enough for some more speed on top.
 function placeFeatures(design: TrackDesign, straights: { start: number; end: number }[], trackLength: number) {
   const jumps: Jump[] = [];
   design.straights.forEach((specs, straightIndex) => {
@@ -457,11 +477,11 @@ function placeFeatures(design: TrackDesign, straights: { start: number; end: num
     const cornerClearance = design.cornerClearance;
     let cursor = straight.start + cornerClearance;
     let runUp = cornerClearance;
-    let entrySpeed = cornerExitSpeed(design.corners[straightIndex].radius);
+    let entrySpeed = cornerExitSpeed(design.corners, straightIndex);
     for (const spec of specs) {
       cursor += spec.runUp ?? 0;
       runUp += spec.runUp ?? 0;
-      const runUpSpeed = speedAfterRunUp(runUp, entrySpeed, 5);
+      const runUpSpeed = speedAfterRunUp(runUp, entrySpeed);
       const feature = buildFeature(spec, Math.min(design.maxDesignSpeed, runUpSpeed), runUpSpeed, design.maxJumpHeight, where);
       if (cursor + feature.length > straight.end - cornerClearance) {
         throw new Error(`${where}: ${feature.description} needs ${(cursor + feature.length - (straight.end - cornerClearance)).toFixed(1)} m more room`);
@@ -486,15 +506,16 @@ function buildFeature(spec: FeatureSpec, designSpeed: number, runUpSpeed: number
       return tabletop(faceHeight, lipAngle, deck, landingAngle, designSpeed);
     }
     case 'double': {
-      // Cleared from about 90% of the design speed; the landing is as tall as it needs to be (at least the
-      // takeoff), and the gap is re-measured for that height
+      // Sized so a full scrub at the design speed still clears it, and without a scrub it lands well down
+      // the landing; the landing is as tall as it needs to be (at least the takeoff), and the gap is
+      // re-measured for that height
       const takeoffHeight = spec.takeoff ?? 1.8;
       const lipAngle = (spec.lipDegrees ?? 28) * degrees;
       let landingHeight = takeoffHeight;
       let gap = 0;
       for (let pass = 0; pass < 3; pass++) {
-        gap = 0.8 * flightDistance(designSpeed, lipAngle, takeoffHeight, landingHeight);
-        landingHeight = Math.min(takeoffHeight + 1, landingHeightFor(designSpeed, lipAngle, takeoffHeight, gap, maxHeight));
+        gap = 0.7 * flightDistance(designSpeed, lipAngle, takeoffHeight, landingHeight);
+        landingHeight = Math.min(takeoffHeight + 1.6, landingHeightFor(designSpeed, lipAngle, takeoffHeight, gap, maxHeight));
       }
       if (gap < (takeoffHeight + landingHeight) / Math.tan(backsideAngle) + 1.5) {
         throw new Error(`${where}: a double needs more speed than ${designSpeed.toFixed(1)} m/s`);
@@ -519,7 +540,7 @@ function buildFeature(spec: FeatureSpec, designSpeed: number, runUpSpeed: number
         throw new Error(`${where}: the ${spec.kind} needs ${clearSpeed.toFixed(1)} m/s but the run-up gives ${runUpSpeed.toFixed(1)}`);
       }
       const jump = gapJump(spec.kind, spec.takeoff, lipAngle, spec.gap, spec.landing, spec.landingDegrees * degrees, clearSpeed * 1.04);
-      jump.description = `${spec.kind}: ${spec.gap.toFixed(0)} m gap, needs about ${clearSpeed.toFixed(0)} m/s at the lip`;
+      jump.description = `${spec.kind}: ${spec.gap.toFixed(0)} m gap, needs ${clearSpeed.toFixed(1)} m/s at the lip, run-up gives ${runUpSpeed.toFixed(1)}`;
       return jump;
     }
     case 'rollers':
