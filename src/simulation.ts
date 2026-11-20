@@ -12,9 +12,20 @@ export const settings = {
   suspensionTravel: 0.3,
   suspensionRestLength: 0.35,
 
-  engineForce: 1500,
-  topSpeed: 25, // meters per second; engine force fades to zero here
-  engineBrakingForce: 150,
+  // Engine and gearbox: a stock 2024-on Yamaha YZ250F. Five speeds (gearRatios), 57/17 primary, 13/50
+  // sprockets, a 250F-shaped torque curve (engineTorqueCurve) and a 14,000 rpm limiter. Manual (the default) is A up,
+  // B down; automatic shifts for you.
+  gearbox: 'manual' as 'automatic' | 'manual',
+  frontSprocket: 13,
+  rearSprocket: 50,
+  enginePowerScale: 0.55, // share of a stock YZ250F's torque at the rear wheel (1 = stock); the jumps are sized for about this
+  revLimitRpm: 14000,
+  autoUpshiftRpm: 12500, // automatic shifts up here, near peak power
+  autoDownshiftRpm: 8000, // and down when the revs drop under this (if the gear below has room)
+  shiftSeconds: 0.08, // drive cut while a gear changes
+  clutchBiteSeconds: 0.25, // how quickly the clutch drags a revved engine down to the wheel's speed when let out (a clutch dump)
+  engineBrakingTorque: 2, // newton meters at the crank at the rev limit, off the throttle; less at lower revs
+  dragArea: 1.4, // air drag (drag coefficient times frontal area, m^2); more than a real bike's ~0.7 so, with the power scaled down, the top end pulls like the speeds the jumps were sized for
   // Brakes. LT is the front brake and RB the rear, which builds up while held. Combined: LT works both,
   // split by combinedFrontShare, and RB does nothing.
   frontBrakeForce: 1500, // newtons at full LT; about all the front tire can take braking upright on flat dirt
@@ -110,6 +121,9 @@ export const controls = {
   steering: 0, // left stick X, +1 = lean right
   riderForwardLean: 0, // right stick Y, +1 = rider forward
   riderSideLean: 0, // right stick X, +1 = rider's body to the right, which lays the bike over to the left (on the ground and in the air)
+  shiftUp: false, // A, held; a press shifts up one gear (manual gearbox)
+  shiftDown: false, // B, held; a press shifts down one gear (manual gearbox)
+  clutch: false, // LB, held = clutch pulled in
 };
 
 await RAPIER.init();
@@ -225,6 +239,9 @@ export const state = {
   rearSlideAmount: 0, // 0..1, how far past what the tires hold the bike is leaned: the rear steps out
   slideTime: 0, // seconds the rider has been holding the bike in a slide; the hold fades out toward slideHoldSeconds
   preloadCharge: 0, // 0..1, how loaded the suspension is from the rider pushing down (right stick back)
+  gear: 1, // 1..5
+  engineRpm: 0,
+  isOnRevLimiter: false,
   lastJump: { distance: 0, airTime: 0, scrubPercent: 0, preloadPercent: 0, landingLoad: 0, result: '' },
   statusMessage: '',
   statusTimeRemaining: 0,
@@ -327,6 +344,11 @@ export function resetBike(nearX?: number, nearZ?: number) {
   state.groundBankRadians = 0;
   state.bermBankRadians = 0;
   state.wheelSpinRates.fill(0);
+  state.gear = 1;
+  state.engineRpm = 0;
+  shiftTimeRemaining = 0;
+  autoShiftCooldown = 0;
+  isClutchBiting = false;
   state.wheelLocked.fill(false);
   wheelSpinDeficits.fill(0);
   rearBrakeButtonLevel = 0;
@@ -468,11 +490,142 @@ function applyGroundSidePush() {
   }
 }
 
+// ---------- Engine and gearbox ----------
+
+// Stock 2024-on YZ250F: constant-mesh five speed (1st 30/14 ... 5th 25/24), 57/17 primary reduction
+export const gearRatios = [30 / 14, 28 / 16, 26 / 18, 22 / 18, 25 / 24];
+const primaryReduction = 57 / 17;
+const drivetrainEfficiency = 0.9;
+// Crank torque (newton meters) by rpm, shaped like a stock 250F: soft down low, pulling hardest around
+// 10,500 and still making power to the limiter (about 42 hp at 12,500)
+const engineTorqueCurve: [number, number][] = [
+  [1000, 10], [3000, 15], [5000, 19], [7000, 22.5], [9000, 25.5], [10500, 26.8], [11500, 26.2], [12500, 24.3], [13500, 21.5], [14500, 19],
+];
+const idleRpm = 1800;
+const launchRpm = 8500; // where the clutch slips to on full throttle pulling away
+let shiftUpWasHeld = false;
+let shiftDownWasHeld = false;
+let shiftTimeRemaining = 0;
+let autoShiftCooldown = 0;
+let isClutchBiting = false; // the clutch was just let out with the engine spinning faster than the wheel
+const engineInertia = 0.012; // kg m^2 at the crank: crank, flywheel and clutch
+
+// Engine turns per rear wheel turn in a gear
+export function overallRatio(gear: number) {
+  return primaryReduction * gearRatios[gear - 1] * (settings.rearSprocket / settings.frontSprocket);
+}
+
+function engineTorque(rpm: number) {
+  const curve = engineTorqueCurve;
+  if (rpm <= curve[0][0]) return curve[0][1];
+  for (let index = 1; index < curve.length; index++) {
+    const [rpmHigh, torqueHigh] = curve[index];
+    const [rpmLow, torqueLow] = curve[index - 1];
+    if (rpm <= rpmHigh) return torqueLow + ((torqueHigh - torqueLow) * (rpm - rpmLow)) / (rpmHigh - rpmLow);
+  }
+  return curve[curve.length - 1][1];
+}
+
+const rpmPerRadianPerSecond = 60 / (2 * Math.PI);
+
+function changeGear(direction: number, wheelSpinRate: number) {
+  const gear = state.gear + direction;
+  if (gear < 1 || gear > gearRatios.length) return;
+  // A downshift that would throw the engine past the limiter doesn't go in
+  if (direction < 0 && wheelSpinRate * overallRatio(gear) * rpmPerRadianPerSecond > settings.revLimitRpm) return;
+  state.gear = gear;
+  shiftTimeRemaining = settings.shiftSeconds;
+  autoShiftCooldown = 0.4;
+}
+
+// Picks the gear and works out the engine's push on the rear wheel (newtons at the tire, from the throttle)
+// and its engine braking, from how fast the rear wheel is turning. Below the revs the throttle wants, the
+// clutch slips, so the bike pulls away from a standstill in any gear (bogging in a tall one).
+function updateGearbox(throttle: number, isInAir: boolean) {
+  const wheelSpinRate = Math.max(0, state.wheelSpinRates[rearWheelIndex]);
+  shiftTimeRemaining = Math.max(0, shiftTimeRemaining - physicsTimestep);
+  autoShiftCooldown = Math.max(0, autoShiftCooldown - physicsTimestep);
+  const wheelRpm = (gear: number) => wheelSpinRate * overallRatio(gear) * rpmPerRadianPerSecond;
+
+  if (settings.gearbox === 'manual') {
+    if (controls.shiftUp && !shiftUpWasHeld) changeGear(1, wheelSpinRate);
+    if (controls.shiftDown && !shiftDownWasHeld) changeGear(-1, wheelSpinRate);
+  } else if (!isInAir && autoShiftCooldown <= 0 && !controls.clutch) {
+    // Like a rider: on full gas it revs each gear out near peak power and drops down once the revs fall out of
+    // the meat of the power; on part throttle it short-shifts and lets the revs run lower (less engine
+    // braking rolling into a turn). On the brakes it drops down early, ready to drive out. Never down into a
+    // gear that would be straight back on the limiter.
+    const isBraking = controls.frontBrake > 0.1 || controls.rearBrake > 0;
+    const upshiftRpm = THREE.MathUtils.lerp(10500, settings.autoUpshiftRpm, throttle);
+    const downshiftRpm = isBraking ? settings.autoDownshiftRpm : THREE.MathUtils.lerp(6500, settings.autoDownshiftRpm, throttle);
+    if (state.gear < gearRatios.length && throttle > 0.1 && wheelRpm(state.gear) > upshiftRpm) changeGear(1, wheelSpinRate);
+    else if (state.gear > 1 && wheelRpm(state.gear) < downshiftRpm && wheelRpm(state.gear - 1) < settings.autoUpshiftRpm - 1000) {
+      changeGear(-1, wheelSpinRate);
+    }
+  }
+  shiftUpWasHeld = controls.shiftUp;
+  shiftDownWasHeld = controls.shiftDown;
+
+  const ratio = overallRatio(state.gear);
+  const connectedRpm = wheelRpm(state.gear);
+  const limiterRpm = settings.revLimitRpm;
+
+  // Clutch pulled in (LB): the engine is free of the rear wheel, so no drive and no engine braking, and the
+  // throttle revs it up as far as the limiter
+  if (controls.clutch) {
+    const freeRevTarget = idleRpm + throttle * (limiterRpm - idleRpm);
+    state.engineRpm += (freeRevTarget - state.engineRpm) * (1 - Math.exp(-physicsTimestep / 0.12));
+    state.isOnRevLimiter = throttle > 0.1 && state.engineRpm > limiterRpm - 150;
+    isClutchBiting = true;
+    return { driveForce: 0, engineBrakingForce: 0 };
+  }
+
+  // The rider slips the clutch to pull away: up to launchRpm in 1st, much less in a tall gear, which bogs
+  const clutchSlipRpm = idleRpm + throttle * (launchRpm - idleRpm) * (gearRatios[state.gear - 1] / gearRatios[0]) ** 4;
+  const runningRpm = Math.max(connectedRpm, clutchSlipRpm);
+  let flywheelTorque = 0;
+  if (isClutchBiting && state.engineRpm > runningRpm + 50) {
+    // Just let out with the engine revved up: the clutch drags it down to the wheel's speed over
+    // clutchBiteSeconds, and the spin it sheds goes into the rear wheel on top of the engine's own torque
+    // (a clutch dump: a kick out of a turn or up a jump face, or a wheelie)
+    const bittenRpm = runningRpm + (state.engineRpm - runningRpm) * Math.exp(-physicsTimestep / Math.max(settings.clutchBiteSeconds, 0.01));
+    flywheelTorque = (engineInertia * (state.engineRpm - bittenRpm)) / rpmPerRadianPerSecond / physicsTimestep;
+    state.engineRpm = bittenRpm;
+  } else {
+    isClutchBiting = false;
+    state.engineRpm = runningRpm;
+  }
+  const engineRpm = state.engineRpm;
+  // The limiter cuts the spark: no drive at or past it
+  const limiterCut = THREE.MathUtils.clamp((limiterRpm - engineRpm) / 150, 0, 1);
+  state.isOnRevLimiter = throttle > 0.1 && limiterCut < 1;
+  const shiftCut = shiftTimeRemaining > 0 ? 0 : 1;
+  const crankTorque = throttle * engineTorque(engineRpm) * limiterCut * shiftCut + flywheelTorque;
+  const driveForce = (crankTorque * ratio * drivetrainEfficiency * settings.enginePowerScale) / wheelRadius;
+  // Off the throttle the engine holds the bike back harder in a low gear and at high revs. Not once the
+  // clutch is slipping (near a stop).
+  const engineBrakingForce =
+    connectedRpm > 2500 && !isClutchBiting
+      ? ((1 - throttle) * settings.engineBrakingTorque * Math.min(1, connectedRpm / limiterRpm) * ratio * drivetrainEfficiency) / wheelRadius
+      : 0;
+  return { driveForce, engineBrakingForce };
+}
+
+// Air and rolling resistance on the ground. (Left off in the air, so jumps keep the distances they were
+// sized for.)
+function applyDrag(velocity: { x: number; y: number; z: number }) {
+  const speed = Math.hypot(velocity.x, velocity.y, velocity.z);
+  if (speed < 0.1) return;
+  const dragForce = 0.5 * 1.2 * settings.dragArea * speed * speed + 0.015 * settings.bikeMass * settings.gravity;
+  const impulse = (Math.min(dragForce * physicsTimestep, 0.5 * settings.bikeMass * speed)) / speed;
+  chassisBody.applyImpulse({ x: -velocity.x * impulse, y: -velocity.y * impulse, z: -velocity.z * impulse }, true);
+}
+
 // Brakes and engine, per wheel. A rolling tire brakes as hard as asked, up to its grip, and whatever grip
 // the brake takes is gone from cornering (friction circle): dragging a little costs almost nothing, a
 // handful mid-corner stands the bike up or pushes the front. Ask for more than the tire's whole grip and
 // the wheel locks and slides. It rolls again once the brake is eased under what the sliding tire pulls.
-function updateBrakesAndEngine(throttle: number, engineTaper: number, forwardSpeed: number) {
+function updateBrakesAndEngine(engineDrive: number, engineBraking: number, forwardSpeed: number) {
   // RB builds the rear brake up while held and lets it off quickly
   const rampStep = physicsTimestep / Math.max(settings.rearBrakeRampSeconds, 0.01);
   const rearButtonTarget = controls.rearBrake * settings.rearBrakeButtonStrength;
@@ -486,8 +639,6 @@ function updateBrakesAndEngine(throttle: number, engineTaper: number, forwardSpe
     state.brakeLevers[rearWheelIndex] = rearBrakeButtonLevel;
   }
 
-  const engineDrive = throttle * settings.engineForce * engineTaper;
-  const engineBraking = (1 - throttle) * settings.engineBrakingForce;
   for (const wheelIndex of [rearWheelIndex, frontWheelIndex]) {
     const isRear = wheelIndex === rearWheelIndex;
     const brakeRequest = state.brakeLevers[wheelIndex] * (isRear ? settings.rearBrakeForce : settings.frontBrakeForce);
@@ -812,9 +963,9 @@ export function physicsStep() {
     bobbleTimeRemaining -= physicsTimestep;
   }
 
-  // Engine force fades linearly to zero at top speed
-  const engineTaper = THREE.MathUtils.clamp(1 - forwardSpeed / settings.topSpeed, 0, 1);
-  updateBrakesAndEngine(throttle, engineTaper, forwardSpeed);
+  const { driveForce, engineBrakingForce } = updateGearbox(throttle, isInAir);
+  updateBrakesAndEngine(driveForce, engineBrakingForce, forwardSpeed);
+  if (!isInAir) applyDrag(velocity);
 
   // The right stick moves the rider's body the way it points, and the bike goes over the other way, on the
   // ground and in the air (the opposite of the left stick). On the ground the body and bike balance out, so
@@ -894,12 +1045,8 @@ export function physicsStep() {
     if (vehicle.wheelIsInContact(wheelIndex)) {
       state.wheelSpinRates[wheelIndex] = state.wheelLocked[wheelIndex] ? 0 : Math.max(0, forwardSpeed / wheelRadius - wheelSpinDeficits[wheelIndex]);
     } else {
-      // The rear wheel revs up to the top speed rev limit, the same taper the engine uses on the ground
-      const wheelSurfaceSpeed = previousSpinRate * wheelRadius;
-      const driveTorque =
-        wheelIndex === rearWheelIndex
-          ? throttle * settings.engineForce * wheelRadius * THREE.MathUtils.clamp(1 - wheelSurfaceSpeed / settings.topSpeed, 0, 1)
-          : 0;
+      // The engine revs the rear wheel up, as far as the limiter in the gear it's in
+      const driveTorque = wheelIndex === rearWheelIndex ? driveForce * wheelRadius : 0;
       const spinRateAfterDrive = previousSpinRate + (driveTorque / settings.wheelInertia) * physicsTimestep;
       // Brakes slow the wheel toward a stop but never spin it backwards
       const fullBrakeForce = wheelIndex === rearWheelIndex ? settings.rearBrakeForce : settings.frontBrakeForce;

@@ -19,7 +19,8 @@ export type BikePose = {
 
 // ---------- Materials ----------
 
-const plastic = new THREE.MeshStandardMaterial({ color: 0xd9452b, roughness: 0.45 });
+// Yamaha racing blue plastics with white side panels
+const plastic = new THREE.MeshStandardMaterial({ color: 0x1240b0, roughness: 0.45 });
 const plasticWhite = new THREE.MeshStandardMaterial({ color: 0xf1f1ee, roughness: 0.5 });
 const seatBlack = new THREE.MeshStandardMaterial({ color: 0x1b1c1f, roughness: 0.85 });
 const rubber = new THREE.MeshStandardMaterial({ color: 0x1d1d1d, roughness: 0.95 });
@@ -28,8 +29,8 @@ const engineMetal = new THREE.MeshStandardMaterial({ color: 0x3b3e44, metalness:
 const darkMetal = new THREE.MeshStandardMaterial({ color: 0x26282d, metalness: 0.5, roughness: 0.45 });
 const chrome = new THREE.MeshStandardMaterial({ color: 0xdfe3e8, metalness: 0.9, roughness: 0.2 });
 const springYellow = new THREE.MeshStandardMaterial({ color: 0xe8c12c, roughness: 0.5 });
-const jersey = new THREE.MeshStandardMaterial({ color: 0x2b5fd9, roughness: 0.8 });
-const jerseyTrim = new THREE.MeshStandardMaterial({ color: 0xf1f1ee, roughness: 0.8 });
+const jersey = new THREE.MeshStandardMaterial({ color: 0xeceae6, roughness: 0.8 });
+const jerseyTrim = new THREE.MeshStandardMaterial({ color: 0x1240b0, roughness: 0.8 });
 const pants = new THREE.MeshStandardMaterial({ color: 0x24272e, roughness: 0.85 });
 const boots = new THREE.MeshStandardMaterial({ color: 0xe9e9e6, roughness: 0.6 });
 const gloves = new THREE.MeshStandardMaterial({ color: 0x24272e, roughness: 0.8 });
@@ -267,8 +268,12 @@ export function createBikeModel() {
   fenderMount.position.set(0.02, -0.28, 0);
   fenderMount.rotation.z = -rake;
   steering.add(fenderMount);
+  // Follows the top of the tire: nearly level behind the forks, curving down over the front of the wheel
   plate(
-    [[-0.17, 0.03], [0.0, -0.02], [0.3, -0.035], [0.5, 0.0], [0.52, 0.035], [0.3, 0.0], [0.0, 0.015], [-0.17, 0.06]],
+    [
+      [-0.2, 0.0], [0.0, -0.025], [0.2, -0.045], [0.38, -0.08], [0.5, -0.14], [0.54, -0.18],
+      [0.56, -0.165], [0.52, -0.12], [0.4, -0.05], [0.2, -0.015], [0.0, 0.005], [-0.2, 0.035],
+    ],
     0.14,
     plastic,
     fenderMount,

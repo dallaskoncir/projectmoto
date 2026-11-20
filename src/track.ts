@@ -240,8 +240,8 @@ function landingHeightFor(designSpeed: number, lipAngle: number, takeoffHeight: 
   return height;
 }
 
-// Rough speed the bike reaches over a run-up on full throttle, starting from corner-exit speed. Matches the
-// engine (force fading to zero at top speed), a little under what the bike really does flat out.
+// Rough speed the bike reaches over a run-up on full throttle, starting from corner-exit speed: a fit to the
+// bike's acceleration through the gears, a little under what it really does flat out.
 export function speedAfterRunUp(distance: number, startSpeed = 8, engineAcceleration = 7, topSpeed = 25) {
   let speed = startSpeed;
   for (let traveled = 0; traveled < distance; traveled += 0.5) {

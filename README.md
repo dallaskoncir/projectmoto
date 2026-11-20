@@ -3,6 +3,9 @@
 A gray-box prototype for a motocross game. There's no art, menus or sound, just physics, controller
 controls and tracks to ride.
 
+The bike is geared like a stock 2024-on Yamaha YZ250F: five speeds, 57/17 primary, 13/50 sprockets and a
+14,000 rpm limiter, with automatic or manual shifting.
+
 Built with [three.js](https://threejs.org), [Rapier](https://rapier.rs) physics and
 [lil-gui](https://lil-gui.georgealways.com) for live tuning.
 
@@ -23,10 +26,12 @@ browser's "standard" mapping are used, so wheels and pedals are ignored.
 | RT | Throttle. Leaned over, the drive uses up the rear tire's grip: too much gas mid-corner steps the rear out and runs wide, and held on it low-sides. Pick the bike up to get on the gas |
 | LT | Brakes, both wheels together (75% front by default) |
 | RB | Rear brake on its own (builds up while held), when combined brakes are switched off in the Brakes panel |
+| LB | Clutch: hold to free the engine from the rear wheel (coast with no engine braking, or rev it up); let it out with the revs up for a kick of drive (a clutch dump). Pulling away doesn't need it |
 | Left stick | Lean the bike and rider into a turn. The rider countersteers to get there. About 85% stick is the tires' limit; past it the rear steps out and the bike slides around tighter, scrubbing speed. Hold it there too long and it low-sides. A berm lets the bike lean further and corner harder than flat ground, so ride up into it to carry more speed; it holds full stick, but turning much tighter than the berm drops you off its face to the inside, where the rear steps out until you stand the bike up. In the air it lays the bike over: hold it through the lip to start a whip |
 | Right stick left/right | Move the rider's body that way, and the bike goes over the other way: stand it up or press it down in a turn, scrub off a lip, whip in the air (with the left stick, the full whip with more swing) |
 | Right stick up/down | Rider forward/back: weight shift on the ground, pitch in the air. Preload: hold it back up the face of a jump and flick it forward at the lip to pop higher and further |
-| A | Back to the start |
+| A / B | Shift up / down (manual gearbox, the default; switch to automatic in the Engine folder of the panel) |
+| View | Back to the start |
 | D-pad left/right | Previous/next track |
 
 ## Tracks

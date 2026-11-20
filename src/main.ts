@@ -173,9 +173,17 @@ suspensionFolder.add(settings, 'suspensionReboundDamping', 0, 30, 0.1).name('reb
 suspensionFolder.add(settings, 'suspensionTravel', 0.05, 0.6, 0.01).name('travel');
 suspensionFolder.add(settings, 'suspensionRestLength', 0.1, 0.6, 0.01).name('rest length');
 const engineFolder = gui.addFolder('Engine and brakes');
-engineFolder.add(settings, 'engineForce', 0, 5000, 10).name('engine force');
-engineFolder.add(settings, 'topSpeed', 5, 60, 0.5).name('top speed (m/s)');
-engineFolder.add(settings, 'engineBrakingForce', 0, 1000, 10).name('engine braking');
+engineFolder.add(settings, 'gearbox', ['automatic', 'manual']).name('gearbox (manual: A up, B down)');
+engineFolder.add(settings, 'frontSprocket', 11, 15, 1).name('front sprocket');
+engineFolder.add(settings, 'rearSprocket', 44, 56, 1).name('rear sprocket');
+engineFolder.add(settings, 'enginePowerScale', 0.2, 1.2, 0.05).name('power (1 = stock YZ250F)');
+engineFolder.add(settings, 'autoUpshiftRpm', 8000, 14000, 100).name('auto upshift rpm');
+engineFolder.add(settings, 'autoDownshiftRpm', 4000, 11000, 100).name('auto downshift rpm');
+engineFolder.add(settings, 'revLimitRpm', 10000, 15000, 100).name('rev limiter rpm');
+engineFolder.add(settings, 'shiftSeconds', 0, 0.3, 0.01).name('shift drive cut (s)');
+engineFolder.add(settings, 'clutchBiteSeconds', 0.05, 1, 0.05).name('clutch bite time (s)');
+engineFolder.add(settings, 'engineBrakingTorque', 0, 15, 0.5).name('engine braking (Nm)');
+engineFolder.add(settings, 'dragArea', 0, 1.5, 0.05).name('air drag area');
 const brakeFolder = gui.addFolder('Brakes');
 brakeFolder.add(settings, 'frontBrakeForce', 0, 4000, 10).name('front brake force (LT)');
 brakeFolder.add(settings, 'rearBrakeForce', 0, 3000, 10).name('rear brake force');
@@ -255,7 +263,7 @@ const layoutController = trackFolder
   .add(settings, 'trackIndex', trackChoices)
   .name('track (D-pad left/right)')
   .onChange((index: number) => loadTrack(Number(index)));
-trackFolder.add({ restart: () => resetBike() }, 'restart').name('back to the start (A button)');
+trackFolder.add({ restart: () => resetBike() }, 'restart').name('back to the start (View button)');
 const copyButton = gui
   .add(
     {
@@ -300,6 +308,9 @@ function readGamepad() {
     controls.steering = 0;
     controls.riderForwardLean = 0;
     controls.riderSideLean = 0;
+    controls.shiftUp = false;
+    controls.shiftDown = false;
+    controls.clutch = false;
     resetPressed = false;
     trackStepPressed = 0;
     return;
@@ -311,7 +322,10 @@ function readGamepad() {
   controls.steering = applyDeadzone(gamepad.axes[0] ?? 0);
   controls.riderForwardLean = -applyDeadzone(gamepad.axes[3] ?? 0); // +1 = rider forward
   controls.riderSideLean = applyDeadzone(gamepad.axes[2] ?? 0); // +1 = rider's body right, bike over to the left
-  resetPressed = gamepad.buttons[0]?.pressed ?? false;
+  controls.shiftUp = gamepad.buttons[0]?.pressed ?? false; // A
+  controls.shiftDown = gamepad.buttons[1]?.pressed ?? false; // B
+  controls.clutch = gamepad.buttons[4]?.pressed ?? false; // LB
+  resetPressed = gamepad.buttons[8]?.pressed ?? false; // View
   trackStepPressed = (gamepad.buttons[15]?.pressed ? 1 : 0) - (gamepad.buttons[14]?.pressed ? 1 : 0);
   controllerDescription = gamepad.id;
 }
@@ -455,7 +469,8 @@ function updateHud(frameSeconds: number) {
   }
   hudElement.textContent =
     `${track.design.name}   ground bank ${toDegrees(Math.abs(state.groundBankRadians))}°   ${nextJumpText}\n` +
-    `${speedKilometersPerHour.toFixed(0)} km/h   pitch ${noseUpDegrees.toFixed(0)}°   ` +
+    `${speedKilometersPerHour.toFixed(0)} km/h   gear ${state.gear} (${settings.gearbox})   ` +
+    `${(Math.round(state.engineRpm / 100) * 100).toFixed(0)} rpm${state.isOnRevLimiter ? ' LIMITER' : ''}${controls.clutch ? ' CLUTCH IN' : ''}   pitch ${noseUpDegrees.toFixed(0)}°   ` +
     `rear wheel ${(state.wheelSpinRates[rearWheelIndex] * wheelRadius * 3.6).toFixed(0)} km/h   ` +
     `front ${frontContact}   rear ${rearContact}\n` +
     `bike lean ${toDegrees(state.bikeLeanRadians)}°   bike+rider lean ${toDegrees(state.bodyLeanRadians)}°   ` +
