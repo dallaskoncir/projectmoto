@@ -1,6 +1,7 @@
 // The track: a closed loop laid out as a centerline, with berms on the outside of corners and jumps on the
 // straights, baked into one heightfield that both physics and rendering use. Pure math, no browser code.
-// The jumps (other than the big double) come from a seed, so a layout can be shared and rebuilt.
+// Each track is a fixed design (trackDesigns.ts): corner points, and for each straight the features on it
+// in order. Jumps are sized from the speed their run-up gives, so they stay rideable wherever they sit.
 
 export const mapSize = 300; // meters, square, centered on the origin
 export const cellSize = 0.4;
@@ -10,26 +11,34 @@ export const trackHalfWidth = 4;
 export const centerlineSpacing = 0.5;
 const featureReach = trackHalfWidth + 10; // how far from the centerline track shaping reaches
 
-// Closed centerline, ridden clockwise seen from above (heading +X, a right turn goes toward +Z).
-// Corners of a polygon, each rounded off with its own radius. Seven right-handers, three left-handers
-// (the S through the middle and the back section) and a hairpin made of two tight rights.
-const corners: { x: number; z: number; radius: number }[] = [
-  { x: -106, z: -106, radius: 14 }, // right onto the long top straight (big double)
-  { x: 100, z: -106, radius: 12 }, // right
-  { x: 106, z: 25, radius: 9 }, // right
-  { x: 31, z: 28, radius: 10 }, // left
-  { x: 30, z: 112, radius: 8 }, // hairpin, first half
-  { x: 5, z: 112, radius: 8 }, // hairpin, second half
-  { x: 0, z: 56, radius: 10 }, // left
-  { x: -69, z: 56, radius: 10 }, // right
-  { x: -69, z: -25, radius: 10 }, // left
-  { x: -106, z: -25, radius: 10 }, // right
-];
+// A feature on a straight. Jumps without sizes are sized for the speed their run-up gives; `runUp` adds
+// flat ground before a feature on top of the usual spacing.
+export type FeatureSpec = { runUp?: number } & (
+  | { kind: 'tabletop'; lipDegrees?: number }
+  | { kind: 'double'; lipDegrees?: number; takeoff?: number }
+  | { kind: 'step-up'; takeoff?: number; rise?: number; deck?: number }
+  | { kind: 'big double' | 'triple'; takeoff: number; lipDegrees: number; gap: number; landing: number; landingDegrees: number }
+  | { kind: 'rollers' | 'whoops'; count: number; height: number; spacing: number }
+  | { kind: 'rhythm'; count: number; height: number; lipDegrees?: number; backDegrees?: number }
+);
+
+export type TrackDesign = {
+  name: string;
+  style: 'motocross' | 'supercross';
+  // Closed loop ridden in this order, each corner of the polygon rounded off with its own radius
+  corners: { x: number; z: number; radius: number }[];
+  // straights[i] runs from corner i to corner i+1
+  straights: FeatureSpec[][];
+  landingRoom: number; // flat ground after each feature
+  cornerClearance: number; // flat ground a straight keeps at each end, where the berms ease in and out
+  maxDesignSpeed: number; // meters per second; no jump is built for more than this
+  maxJumpHeight: number; // meters; the tallest a self-sizing jump's landing gets
+};
 
 // ---------- Jump profiles ----------
 // A profile is the height of a feature at distance u along the track from where it starts.
 
-export type JumpKind = 'big double' | 'double' | 'tabletop' | 'step-up' | 'rollers';
+export type JumpKind = 'big double' | 'triple' | 'double' | 'tabletop' | 'step-up' | 'rollers' | 'rhythm' | 'whoops';
 
 export type Jump = {
   kind: JumpKind;
@@ -112,14 +121,36 @@ function gapJump(
   };
 }
 
-function rollers(count: number, height: number, spacing: number, designSpeed: number): Omit<Jump, 'start'> {
+// Rhythm section: a row of small jumps, each a curved takeoff face and a straight downslope that is the
+// landing for the one before. Slow it rolls; with speed you single or double them.
+function rhythmSection(count: number, height: number, lipAngle: number, backAngle: number, designSpeed: number): Omit<Jump, 'start'> {
+  const face = takeoffFace(height, lipAngle);
+  const back = height / Math.tan(backAngle);
+  const spacing = face.length + back;
+  const edges = Array.from({ length: count }, (_, index) => index * spacing + face.length);
   return {
-    kind: 'rollers',
+    kind: 'rhythm',
+    length: count * spacing,
+    height: (u) => {
+      const along = u % spacing;
+      return along < face.length ? face.height(along) : height * (1 - (along - face.length) / back);
+    },
+    edges,
+    edgeHeights: edges.map(() => height),
+    description: `rhythm: ${count} jumps, ${height.toFixed(1)} m high, ${spacing.toFixed(1)} m apart`,
+    designSpeed,
+  };
+}
+
+// Rollers and whoops (short and close, for skimming) are rounded bumps
+function rollers(kind: JumpKind, count: number, height: number, spacing: number, designSpeed: number): Omit<Jump, 'start'> {
+  return {
+    kind,
     length: count * spacing,
     height: (u) => (height * (1 - Math.cos((2 * Math.PI * u) / spacing))) / 2,
     edges: [],
     edgeHeights: [],
-    description: `${count} rollers, ${height.toFixed(1)} m high, ${spacing.toFixed(1)} m apart`,
+    description: `${count} ${kind}, ${height.toFixed(1)} m high, ${spacing.toFixed(1)} m apart`,
     designSpeed,
   };
 }
@@ -141,15 +172,14 @@ function flightDistance(speed: number, lipAngle: number, takeoffHeight: number, 
 
 // How tall a landing at this angle has to be so its slope reaches out to where a rider 20% over the design
 // speed comes down. Flight grows with the square of speed, so faster sections get bigger jumps, like a
-// real track. Capped so jumps stay a sensible size; past the cap a big overjump still lands flat.
+// real track. Capped (per track) so jumps stay a sensible size; past the cap a big overjump lands flat.
 const landingAngle = 17 * degrees;
-const maxLandingHeight = 3;
-function landingHeightFor(designSpeed: number, lipAngle: number, takeoffHeight: number, knuckle: number) {
+function landingHeightFor(designSpeed: number, lipAngle: number, takeoffHeight: number, knuckle: number, maxLandingHeight: number) {
   let height = takeoffHeight;
   // The far landing point depends on the landing's height, so settle it in a few passes
   for (let pass = 0; pass < 4; pass++) {
     const farthest = flightDistance(designSpeed * 1.2, lipAngle, takeoffHeight, height * 0.3);
-    height = Math.min(maxLandingHeight, Math.max(takeoffHeight, (farthest - knuckle) * Math.tan(landingAngle)));
+    height = Math.min(maxLandingHeight, Math.max(Math.min(takeoffHeight, maxLandingHeight), (farthest - knuckle) * Math.tan(landingAngle)));
   }
   return height;
 }
@@ -164,17 +194,6 @@ function speedAfterRunUp(distance: number, startSpeed = 8, engineAcceleration = 
   return speed;
 }
 
-// Small seeded random generator (mulberry32) so a layout number always builds the same track
-function seededRandom(seed: number) {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let mixed = Math.imul(state ^ (state >>> 15), 1 | state);
-    mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
-    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 function smoothstep(value: number, edge0: number, edge1: number) {
   const t = Math.min(1, Math.max(0, (value - edge0) / (edge1 - edge0)));
   return t * t * (3 - 2 * t);
@@ -183,7 +202,7 @@ function smoothstep(value: number, edge0: number, edge1: number) {
 // ---------- Track ----------
 
 export type Track = {
-  seed: number;
+  design: TrackDesign;
   heights: Float32Array; // (cellsPerSide+1)^2, Rapier's layout: index = zIndex + xIndex * (cellsPerSide+1)
   onTrack: Float32Array; // same layout, 1 on the riding surface fading to 0 off it, for coloring
   centerlineX: Float32Array;
@@ -191,6 +210,7 @@ export type Track = {
   tangentX: Float32Array;
   tangentZ: Float32Array;
   cornerStrength: Float32Array; // 0 on straights, 1 in tight corners
+  straights: { start: number; end: number }[]; // straights[i] runs from corner i's arc to corner i+1's
   length: number;
   jumps: Jump[];
   heightAt: (x: number, z: number) => number;
@@ -198,16 +218,15 @@ export type Track = {
   spawnIndex: number;
 };
 
-export function buildTrack(seed: number, withJumps = true): Track {
-  const centerline = buildCenterline();
+export function buildTrack(design: TrackDesign, withJumps = true): Track {
+  const centerline = buildCenterline(design.corners);
   const sampleCount = centerline.x.length;
   const length = sampleCount * centerlineSpacing;
-  const { cornerStrength, sharpness, turnDirection } = measureCorners(centerline.tangentX, centerline.tangentZ);
+  const { cornerStrength, turnDirection } = measureCorners(centerline.tangentX, centerline.tangentZ);
 
-  // Straights are measured between the corners themselves; the run-up margin covers the berms easing out
-  const straights = findStraights(sharpness);
-  const jumps = withJumps ? placeJumps(straights, seed) : [];
-  const spawnIndex = Math.round(straights[0].start / centerlineSpacing + 6 / centerlineSpacing) % sampleCount;
+  const jumps = withJumps ? placeFeatures(design, centerline.straights, length) : [];
+  // Start just out of the first corner, on the first straight
+  const spawnIndex = Math.round((centerline.straights[0].start + 3) / centerlineSpacing) % sampleCount;
 
   // Bake the heightfield. Each centerline sample stamps the grid points around it, keeping whichever
   // sample is nearest, then the nearest point is refined onto the centerline segment for smooth slopes.
@@ -285,7 +304,7 @@ export function buildTrack(seed: number, withJumps = true): Track {
   };
 
   return {
-    seed,
+    design,
     heights,
     onTrack,
     centerlineX: centerline.x,
@@ -293,6 +312,7 @@ export function buildTrack(seed: number, withJumps = true): Track {
     tangentX: centerline.tangentX,
     tangentZ: centerline.tangentZ,
     cornerStrength,
+    straights: centerline.straights,
     length,
     jumps,
     heightAt,
@@ -302,10 +322,16 @@ export function buildTrack(seed: number, withJumps = true): Track {
 }
 
 // Straight lines between the polygon corners, each corner replaced by a circular arc of its radius,
-// resampled every centerlineSpacing meters
-function buildCenterline() {
+// resampled every centerlineSpacing meters. Also returns where each straight (corner i's arc end to
+// corner i+1's arc start) lies along the track.
+function buildCenterline(designCorners: TrackDesign['corners']) {
+  // Shift the layout a fraction of a cell. A straight on a round coordinate sits exactly on a heightfield
+  // grid line, where Rapier's wheel rays slip between the triangles and the bike sinks to its frame.
+  const gridDodge = 0.137;
+  const corners = designCorners.map((corner) => ({ ...corner, x: corner.x + gridDodge, z: corner.z + gridDodge }));
   const denseX: number[] = [];
   const denseZ: number[] = [];
+  const arcBounds: { startDense: number; endDense: number }[] = [];
   const cornerCount = corners.length;
   for (let index = 0; index < cornerCount; index++) {
     const previous = corners[(index - 1 + cornerCount) % cornerCount];
@@ -327,6 +353,10 @@ function buildCenterline() {
     const centerZ = arcStartZ + turnSide * inX * corner.radius;
     const startAngle = Math.atan2(arcStartZ - centerZ, arcStartX - centerX);
     const arcSteps = Math.max(4, Math.ceil((turnAngle * corner.radius) / 0.1));
+    if (tangentLength > inLength / 2 + 0.01 || tangentLength > outLength / 2 + 0.01) {
+      throw new Error(`corner ${index} at (${corner.x}, ${corner.z}): radius ${corner.radius} is too big for the straights beside it`);
+    }
+    arcBounds.push({ startDense: denseX.length, endDense: denseX.length + arcSteps });
     for (let step = 0; step <= arcSteps; step++) {
       const angle = startAngle + (turnSide * turnAngle * step) / arcSteps;
       denseX.push(centerX + corner.radius * Math.cos(angle));
@@ -365,7 +395,16 @@ function buildCenterline() {
     tangentX[sample] = dx / size;
     tangentZ[sample] = dz / size;
   }
-  return { x, z, tangentX, tangentZ };
+  // Distances along the resampled track (it is very slightly shorter than the dense curve)
+  const toTrackDistance = (denseIndex: number) => (cumulative[denseIndex] * sampleCount * centerlineSpacing) / totalLength;
+  const straights = arcBounds.map((arc, index) => {
+    const nextArc = arcBounds[(index + 1) % cornerCount];
+    const start = toTrackDistance(arc.endDense);
+    let end = toTrackDistance(nextArc.startDense);
+    if (end < start) end += sampleCount * centerlineSpacing;
+    return { start, end };
+  });
+  return { x, z, tangentX, tangentZ, straights };
 }
 
 // Curvature along the track, smoothed so berms ramp in and out. Positive turnDirection is a right-hander.
@@ -398,132 +437,97 @@ function measureCorners(tangentX: Float32Array, tangentZ: Float32Array) {
     for (let offset = -easeWindow; offset <= easeWindow; offset++) sum += cornerStrength[(sample + offset + sampleCount) % sampleCount];
     eased[sample] = smoothstep(sum / (2 * easeWindow + 1), 0, 1);
   }
-  return { cornerStrength: eased, sharpness: cornerStrength, turnDirection };
+  return { cornerStrength: eased, turnDirection };
 }
 
-// Stretches of track with no corner, longest first, as [start, end) distances along the track
-function findStraights(cornerStrength: Float32Array) {
-  const sampleCount = cornerStrength.length;
-  const isStraight = (sample: number) => cornerStrength[(sample + sampleCount) % sampleCount] < 0.02;
-  // Start scanning just after a corner so no straight wraps around the start
-  let firstCorner = 0;
-  while (isStraight(firstCorner)) firstCorner++;
-  const straights: { start: number; end: number }[] = [];
-  let runStart = -1;
-  for (let offset = 0; offset <= sampleCount; offset++) {
-    const sample = firstCorner + offset;
-    if (isStraight(sample) && offset < sampleCount) {
-      if (runStart < 0) runStart = sample;
-    } else if (runStart >= 0) {
-      straights.push({ start: runStart * centerlineSpacing, end: sample * centerlineSpacing });
-      runStart = -1;
-    }
-  }
-  const trackLength = sampleCount * centerlineSpacing;
-  return straights
-    .map(({ start, end }) => ({ start: start % trackLength, end: start % trackLength + (end - start) }))
-    .sort((a, b) => b.end - b.start - (a.end - a.start));
+// Speed a rider carries out of a corner of this radius, roughly
+function cornerExitSpeed(radius: number) {
+  return Math.min(8.5, Math.max(5, Math.sqrt(radius * 9.81 * 0.8)));
 }
 
-function placeJumps(straights: { start: number; end: number }[], seed: number) {
-  const random = seededRandom(seed);
-  const between = (low: number, high: number) => low + (high - low) * random();
+// Lays each straight's features out in order from the corner, each sized for the speed its run-up gives
+// at a steady (not flat-out) throttle: at that speed it lands just past the knuckle, slower lands on the
+// deck or short, faster lands further down a landing long enough for about 25% more speed.
+function placeFeatures(design: TrackDesign, straights: { start: number; end: number }[], trackLength: number) {
   const jumps: Jump[] = [];
-  const runUpFromCorner = 10;
-  const landingRoom = 8;
-
-  // The big double goes on the longest straight with plenty of run-up
-  const longest = straights[0];
-  const bigDoubleLip = 30 * degrees;
-  // Same height as its takeoff (about 15 m/s to clear) with a long 13 degree landing that still catches it
-  // at full throttle from the start
-  const bigDoubleLandingHeight = 2.6;
-  const bigDouble = {
-    ...gapJump('big double', 2.6, bigDoubleLip, 21, bigDoubleLandingHeight, 13 * degrees, 16),
-    start: longest.start + 45,
-  };
-  bigDouble.description = `big double: 21 m gap, needs about ${speedToClear(21, bigDoubleLip, 2.6, bigDoubleLandingHeight).toFixed(0)} m/s at the lip`;
-  jumps.push(bigDouble);
-  const fillAfterBigDouble = { start: bigDouble.start + bigDouble.length + landingRoom, end: longest.end };
-
-  for (const straight of [fillAfterBigDouble, ...straights.slice(1)]) {
-    let cursor = straight.start + (straight === fillAfterBigDouble ? 0 : runUpFromCorner);
-    let runUp = straight === fillAfterBigDouble ? 10 : runUpFromCorner;
-    // Speed a rider carries into the run-up: off a corner, or off the previous jump's landing
-    let entrySpeed = straight === fillAfterBigDouble ? bigDouble.designSpeed : 8.5;
-    let previousKind: JumpKind | undefined;
-    for (;;) {
-      const room = straight.end - landingRoom - cursor;
-      if (room < 10) break;
-      // Each kind is sized for the lip speed this run-up gives at a steady (not flat-out) throttle, so at
-      // that speed it lands just past the knuckle, slower lands on the deck or short, faster lands further
-      // down a landing long enough for about 25% more speed. Returns nothing if it can't fit the room.
-      const designSpeed = Math.min(16, speedAfterRunUp(runUp, entrySpeed, 5));
-      const candidates: { weight: number; build: () => Omit<Jump, 'start'> | undefined }[] = [
-        {
-          weight: 3,
-          build: () => {
-            // A tabletop's landing is as tall as its deck, so the whole jump grows to what the landing needs
-            const lipAngle = between(22, 30) * degrees;
-            let faceHeight = between(1.4, 2.4);
-            const deck = Math.max(3, 0.75 * flightDistance(designSpeed, lipAngle, faceHeight, faceHeight));
-            faceHeight = landingHeightFor(designSpeed, lipAngle, faceHeight, deck);
-            return tabletop(faceHeight, lipAngle, deck, landingAngle, designSpeed);
-          },
-        },
-        {
-          weight: 3,
-          build: () => {
-            const takeoffHeight = between(1.3, 2.3);
-            const lipAngle = between(24, 32) * degrees;
-            // Cleared from about 90% of the design speed; the landing is as tall as it needs to be (at least
-            // the takeoff), and the gap is re-measured for that height
-            let landingHeight = takeoffHeight;
-            let gap = 0;
-            for (let pass = 0; pass < 3; pass++) {
-              gap = 0.8 * flightDistance(designSpeed, lipAngle, takeoffHeight, landingHeight);
-              landingHeight = Math.min(takeoffHeight + 1, landingHeightFor(designSpeed, lipAngle, takeoffHeight, gap));
-            }
-            if (gap < (takeoffHeight + landingHeight) / Math.tan(backsideAngle) + 1.5) return undefined;
-            return gapJump('double', takeoffHeight, lipAngle, gap, landingHeight, landingAngle, designSpeed);
-          },
-        },
-        {
-          weight: 2,
-          build: () => {
-            const takeoffHeight = between(1.0, 1.6);
-            const lipAngle = between(26, 32) * degrees;
-            const landingHeight = takeoffHeight + between(0.5, 1.0);
-            const gap = 0.7 * flightDistance(designSpeed, lipAngle, takeoffHeight, landingHeight);
-            if (gap < (takeoffHeight + landingHeight) / Math.tan(backsideAngle) + 1) return undefined;
-            const deck = between(5, 8);
-            return gapJump('step-up', takeoffHeight, lipAngle, gap, landingHeight, landingAngle, designSpeed, deck);
-          },
-        },
-        {
-          weight: 1.2,
-          build: () => {
-            const spacing = between(6, 8);
-            const count = Math.min(Math.round(between(3, 5)), Math.floor(room / spacing));
-            return count >= 2 ? rollers(count, between(0.4, 0.7), spacing, designSpeed) : undefined;
-          },
-        },
-      ];
-      const options = candidates
-        .map((candidate) => ({ weight: candidate.weight, feature: candidate.build() }))
-        .filter((option) => option.feature && option.feature.kind !== previousKind && option.feature.length <= room);
-      if (options.length === 0) break;
-      let pick = random() * options.reduce((sum, option) => sum + option.weight, 0);
-      const chosen = options.find((option) => (pick -= option.weight) <= 0) ?? options[options.length - 1];
-      const feature = chosen.feature!;
-      jumps.push({ ...feature, start: cursor });
-      previousKind = feature.kind;
-      cursor += feature.length + landingRoom;
-      runUp = landingRoom;
+  design.straights.forEach((specs, straightIndex) => {
+    const straight = straights[straightIndex];
+    const where = `${design.name}, straight ${straightIndex}`;
+    if (!straight) throw new Error(`${where}: the track has only ${straights.length} straights`);
+    const cornerClearance = design.cornerClearance;
+    let cursor = straight.start + cornerClearance;
+    let runUp = cornerClearance;
+    let entrySpeed = cornerExitSpeed(design.corners[straightIndex].radius);
+    for (const spec of specs) {
+      cursor += spec.runUp ?? 0;
+      runUp += spec.runUp ?? 0;
+      const runUpSpeed = speedAfterRunUp(runUp, entrySpeed, 5);
+      const feature = buildFeature(spec, Math.min(design.maxDesignSpeed, runUpSpeed), runUpSpeed, design.maxJumpHeight, where);
+      if (cursor + feature.length > straight.end - cornerClearance) {
+        throw new Error(`${where}: ${feature.description} needs ${(cursor + feature.length - (straight.end - cornerClearance)).toFixed(1)} m more room`);
+      }
+      jumps.push({ ...feature, start: cursor % trackLength });
+      cursor += feature.length + design.landingRoom;
+      runUp = design.landingRoom;
       entrySpeed = feature.designSpeed;
     }
-  }
+  });
   return jumps.sort((a, b) => a.start - b.start);
+}
+
+// designSpeed sizes the jumps that size themselves; a fixed-size gap only has to be clearable from runUpSpeed
+function buildFeature(spec: FeatureSpec, designSpeed: number, runUpSpeed: number, maxHeight: number, where: string): Omit<Jump, 'start'> {
+  switch (spec.kind) {
+    case 'tabletop': {
+      // A tabletop's landing is as tall as its deck, so the whole jump grows to what the landing needs
+      const lipAngle = (spec.lipDegrees ?? 26) * degrees;
+      const deck = Math.max(3, 0.75 * flightDistance(designSpeed, lipAngle, 1.9, 1.9));
+      const faceHeight = landingHeightFor(designSpeed, lipAngle, Math.min(1.9, maxHeight), deck, maxHeight);
+      return tabletop(faceHeight, lipAngle, deck, landingAngle, designSpeed);
+    }
+    case 'double': {
+      // Cleared from about 90% of the design speed; the landing is as tall as it needs to be (at least the
+      // takeoff), and the gap is re-measured for that height
+      const takeoffHeight = spec.takeoff ?? 1.8;
+      const lipAngle = (spec.lipDegrees ?? 28) * degrees;
+      let landingHeight = takeoffHeight;
+      let gap = 0;
+      for (let pass = 0; pass < 3; pass++) {
+        gap = 0.8 * flightDistance(designSpeed, lipAngle, takeoffHeight, landingHeight);
+        landingHeight = Math.min(takeoffHeight + 1, landingHeightFor(designSpeed, lipAngle, takeoffHeight, gap, maxHeight));
+      }
+      if (gap < (takeoffHeight + landingHeight) / Math.tan(backsideAngle) + 1.5) {
+        throw new Error(`${where}: a double needs more speed than ${designSpeed.toFixed(1)} m/s`);
+      }
+      return gapJump('double', takeoffHeight, lipAngle, gap, landingHeight, landingAngle, designSpeed);
+    }
+    case 'step-up': {
+      const takeoffHeight = spec.takeoff ?? 1.3;
+      const lipAngle = 29 * degrees;
+      const landingHeight = takeoffHeight + (spec.rise ?? 0.75);
+      const gap = 0.7 * flightDistance(designSpeed, lipAngle, takeoffHeight, landingHeight);
+      if (gap < (takeoffHeight + landingHeight) / Math.tan(backsideAngle) + 1) {
+        throw new Error(`${where}: a step-up needs more speed than ${designSpeed.toFixed(1)} m/s`);
+      }
+      return gapJump('step-up', takeoffHeight, lipAngle, gap, landingHeight, landingAngle, designSpeed, spec.deck ?? 6.5);
+    }
+    case 'big double':
+    case 'triple': {
+      const lipAngle = spec.lipDegrees * degrees;
+      const clearSpeed = speedToClear(spec.gap, lipAngle, spec.takeoff, spec.landing);
+      if (clearSpeed > runUpSpeed + 0.5) {
+        throw new Error(`${where}: the ${spec.kind} needs ${clearSpeed.toFixed(1)} m/s but the run-up gives ${runUpSpeed.toFixed(1)}`);
+      }
+      const jump = gapJump(spec.kind, spec.takeoff, lipAngle, spec.gap, spec.landing, spec.landingDegrees * degrees, clearSpeed * 1.04);
+      jump.description = `${spec.kind}: ${spec.gap.toFixed(0)} m gap, needs about ${clearSpeed.toFixed(0)} m/s at the lip`;
+      return jump;
+    }
+    case 'rollers':
+    case 'whoops':
+      return rollers(spec.kind, spec.count, spec.height, spec.spacing, designSpeed);
+    case 'rhythm':
+      return rhythmSection(spec.count, spec.height, (spec.lipDegrees ?? 22) * degrees, (spec.backDegrees ?? 10) * degrees, designSpeed);
+  }
 }
 
 // Distance along the track and signed distance across it (positive = right of the riding direction),

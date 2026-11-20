@@ -21,6 +21,7 @@ import {
   wheelRadius,
 } from './simulation.ts';
 import { cellSize, cellsPerSide, centerlineSpacing, mapSize, trackHalfWidth } from './track.ts';
+import { trackDesigns } from './trackDesigns.ts';
 
 // ---------- Rendering ----------
 
@@ -267,13 +268,11 @@ landingFolder.add(settings, 'bobbleSpeedLoss', 0, 1, 0.01).name('bobble speed lo
 landingFolder.add(settings, 'bobbleSeconds', 0, 3, 0.05).name('bobble duration');
 landingFolder.add(settings, 'crashRespawnSeconds', 0.5, 10, 0.1).name('crash respawn time');
 const trackFolder = gui.addFolder('Track');
+const trackChoices = Object.fromEntries(trackDesigns.map((design, index) => [`${design.name} (${design.style})`, index]));
 const layoutController = trackFolder
-  .add(settings, 'trackSeed', 1, 999999, 1)
-  .name('layout number')
-  .onFinishChange((seed: number) => loadTrack(Math.round(seed)));
-trackFolder
-  .add({ newLayout: () => loadTrack(1 + Math.floor(Math.random() * 999999)) }, 'newLayout')
-  .name('new random layout');
+  .add(settings, 'trackIndex', trackChoices)
+  .name('track (D-pad left/right)')
+  .onChange((index: number) => loadTrack(Number(index)));
 trackFolder.add({ restart: () => resetBike() }, 'restart').name('back to the start (A button)');
 const copyButton = gui
   .add(
@@ -293,6 +292,8 @@ gui.onChange(applySettings);
 
 let resetPressed = false;
 let resetWasPressed = false;
+let trackStepPressed = 0; // -1 D-pad left, +1 D-pad right
+let trackStepWasPressed = 0;
 let controllerDescription = 'no controller';
 
 function applyDeadzone(value: number) {
@@ -318,6 +319,7 @@ function readGamepad() {
     controls.riderForwardLean = 0;
     controls.riderSideLean = 0;
     resetPressed = false;
+    trackStepPressed = 0;
     return;
   }
   // Standard mapping: buttons 6/7 are LT/RT, 5 is RB, axis 0 is left stick X, axes 2/3 are right stick X/Y (up is negative)
@@ -328,6 +330,7 @@ function readGamepad() {
   controls.riderForwardLean = -applyDeadzone(gamepad.axes[3] ?? 0); // +1 = rider forward
   controls.riderSideLean = applyDeadzone(gamepad.axes[2] ?? 0); // +1 = lay the bike over to the right
   resetPressed = gamepad.buttons[0]?.pressed ?? false;
+  trackStepPressed = (gamepad.buttons[15]?.pressed ? 1 : 0) - (gamepad.buttons[14]?.pressed ? 1 : 0);
   controllerDescription = gamepad.id;
 }
 
@@ -440,7 +443,7 @@ function updateHud(frameSeconds: number) {
     }
   }
   hudElement.textContent =
-    `layout ${settings.trackSeed}   ground bank ${toDegrees(Math.abs(state.groundBankRadians))}°   ${nextJumpText}\n` +
+    `${track.design.name}   ground bank ${toDegrees(Math.abs(state.groundBankRadians))}°   ${nextJumpText}\n` +
     `${speedKilometersPerHour.toFixed(0)} km/h   pitch ${noseUpDegrees.toFixed(0)}°   ` +
     `rear wheel ${(state.wheelSpinRates[rearWheelIndex] * wheelRadius * 3.6).toFixed(0)} km/h   ` +
     `front ${frontContact}   rear ${rearContact}\n` +
@@ -463,6 +466,8 @@ function frame(now: number) {
   readGamepad();
   if (resetPressed && !resetWasPressed) resetBike();
   resetWasPressed = resetPressed;
+  if (trackStepPressed !== 0 && trackStepWasPressed === 0) loadTrack(settings.trackIndex + trackStepPressed);
+  trackStepWasPressed = trackStepPressed;
 
   physicsTimeAccumulator += frameSeconds;
   while (physicsTimeAccumulator >= physicsTimestep) {

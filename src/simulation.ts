@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { buildTrack, cellsPerSide, centerlineSpacing, mapSize, type Track } from './track.ts';
+import { trackDesigns } from './trackDesigns.ts';
 
 // Every value that affects feel. Edited live by the panel; "copy settings" exports this as JSON.
 export const settings = {
@@ -65,7 +66,7 @@ export const settings = {
   centerOfMassHeight: -0.15, // relative to the chassis box center; lower = harder to wheelie or loop
   gravity: 9.81,
 
-  trackSeed: 1, // layout number for the randomized jumps; the big double and the corners are always the same
+  trackIndex: 0, // which of trackDesigns (trackDesigns.ts) is loaded
 
   cameraDistance: 6,
   cameraHeight: 2.2,
@@ -120,8 +121,8 @@ export const frontWheelIndex = 1;
 export const world = new RAPIER.World({ x: 0, y: -settings.gravity, z: 0 });
 world.timestep = physicsTimestep;
 
-// The track is one heightfield (see track.ts). A new layout replaces it; trackVersion tells the renderer.
-export let track: Track = buildTrack(settings.trackSeed);
+// The track is one heightfield (see track.ts). Loading another replaces it; trackVersion tells the renderer.
+export let track: Track = buildTrack(trackDesigns[settings.trackIndex]);
 let terrainCollider = createTerrainCollider(track);
 
 function createTerrainCollider(newTrack: Track) {
@@ -136,10 +137,10 @@ function createTerrainCollider(newTrack: Track) {
   );
 }
 
-export function loadTrack(seed: number, withJumps = true) {
-  settings.trackSeed = seed;
+export function loadTrack(trackIndex: number, withJumps = true) {
+  settings.trackIndex = (trackIndex + trackDesigns.length) % trackDesigns.length;
   world.removeCollider(terrainCollider, false);
-  track = buildTrack(seed, withJumps);
+  track = buildTrack(trackDesigns[settings.trackIndex], withJumps);
   terrainCollider = createTerrainCollider(track);
   state.trackVersion++;
   resetBike();
