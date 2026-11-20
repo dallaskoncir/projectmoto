@@ -24,7 +24,7 @@ browser's "standard" mapping are used, so wheels and pedals are ignored.
 | LT | Front brake |
 | RB | Rear brake (builds up while held) |
 | Left stick | Lean the bike and rider into a turn. The rider countersteers to get there. |
-| Right stick left/right | Lay the bike over that way: press it into a turn, scrub off a lip, whip in the air |
+| Right stick left/right | Move the rider's body that way, and the bike goes over the other way: stand it up or press it down in a turn, scrub off a lip, whip in the air |
 | Right stick up/down | Rider forward/back: weight shift on the ground, pitch in the air |
 | A | Back to the start |
 | D-pad left/right | Previous/next track |
@@ -50,7 +50,10 @@ grip, cornering, rider, landings and camera. **Copy settings** copies the curren
 - `src/track.ts`: builds a track's heightfield from a design, including berms and jump shapes. Each jump is
   sized from the speed its run-up gives.
 - `src/trackDesigns.ts`: the six track layouts, as corner points plus the features on each straight.
-- `src/main.ts`: rendering, the tuning panel, controller input, the camera and the readout.
+- `src/bikeModel.ts`: the visible bike and rider, built from simple shapes. The forks, swingarm and wheels
+  follow the physics, and the rider's arms and legs stay on the bars and pegs as the body moves.
+- `src/main.ts`: rendering, the tuning panel, controller input, the camera and the readout. Add
+  `?view=side`, `front`, `rear`, `top` or `quarter` to the URL to park the camera beside the bike.
 
 Driving the simulation from a script in Node 24 is the quickest way to check a physics change:
 

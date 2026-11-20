@@ -4,9 +4,6 @@ import GUI from 'lil-gui';
 import {
   applySettings,
   chassisBody,
-  chassisHalfHeight,
-  chassisHalfLength,
-  chassisHalfWidth,
   controls,
   frontWheelIndex,
   loadTrack,
@@ -22,6 +19,7 @@ import {
 } from './simulation.ts';
 import { cellSize, cellsPerSide, centerlineSpacing, mapSize, trackHalfWidth } from './track.ts';
 import { trackDesigns } from './trackDesigns.ts';
+import { createBikeModel } from './bikeModel.ts';
 
 // ---------- Rendering ----------
 
@@ -150,39 +148,10 @@ const leanedBikeGroup = new THREE.Group();
 scene.add(bikeGroup);
 bikeGroup.add(leanPivot);
 leanPivot.add(leanedBikeGroup);
-const chassisMesh = new THREE.Mesh(
-  new THREE.BoxGeometry(chassisHalfLength * 2, chassisHalfHeight * 2, chassisHalfWidth * 2),
-  new THREE.MeshStandardMaterial({ color: 0xd9452b }),
-);
-chassisMesh.castShadow = true;
-leanedBikeGroup.add(chassisMesh);
-
-// The rider pivots on the seat: slides forward and back with the right stick, and when the right stick lays
-// the bike over the rider leans back the other way by the same amount, so the rider stays near the overall lean.
-const riderPivot = new THREE.Group();
-leanedBikeGroup.add(riderPivot);
-const riderMesh = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.7, 0.35), new THREE.MeshStandardMaterial({ color: 0x2b5fd9 }));
-riderMesh.castShadow = true;
-riderMesh.position.y = 0.35;
-riderPivot.add(riderMesh);
-const riderSeatPosition = new THREE.Vector3(-0.15, chassisHalfHeight, 0);
-
-const wheelGeometry = new THREE.CylinderGeometry(wheelRadius, wheelRadius, 0.15, 24).rotateX(Math.PI / 2);
-const wheelSpokeGeometry = new THREE.BoxGeometry(wheelRadius * 1.9, 0.08, 0.17);
-const wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 });
-const wheelSpokeMaterial = new THREE.MeshStandardMaterial({ color: 0xdddddd });
-const wheelSteeringPivots: THREE.Group[] = [];
-const wheelSpinMeshes: THREE.Mesh[] = [];
-for (let wheelIndex = 0; wheelIndex < vehicle.numWheels(); wheelIndex++) {
-  const steeringPivot = new THREE.Group();
-  const wheelMesh = new THREE.Mesh(wheelGeometry, wheelMaterial);
-  wheelMesh.castShadow = true;
-  wheelMesh.add(new THREE.Mesh(wheelSpokeGeometry, wheelSpokeMaterial));
-  steeringPivot.add(wheelMesh);
-  leanedBikeGroup.add(steeringPivot);
-  wheelSteeringPivots.push(steeringPivot);
-  wheelSpinMeshes.push(wheelMesh);
-}
+const bikeModel = createBikeModel();
+leanedBikeGroup.add(bikeModel.root);
+// The rider stands on the pegs on straights and in the air, and sits down into corners and when slow
+let riderStanding = 0;
 
 const overlayElement = document.getElementById('overlay')!;
 const hudElement = document.getElementById('hud')!;
@@ -220,6 +189,8 @@ corneringFolder.add(settings, 'frontGrip', 0.1, 5, 0.05).name('front grip');
 corneringFolder.add(settings, 'rearGrip', 0.1, 5, 0.05).name('rear grip');
 corneringFolder.add(settings, 'maxLeanAngleDegrees', 5, 65, 1).name('full stick lean');
 corneringFolder.add(settings, 'pressExtraLeanDegrees', 0, 25, 1).name('extra lean when pressing bike in');
+corneringFolder.add(settings, 'forwardExtraLeanDegrees', 0, 25, 1).name('extra lean when rider forward');
+corneringFolder.add(settings, 'leanGripUse', 0.5, 1, 0.01).name('share of grip used for lean');
 corneringFolder.add(settings, 'pressGripBonus', 0, 1, 0.01).name('extra grip when pressing bike in');
 corneringFolder.add(settings, 'countersteerLimitG', 0, 1.5, 0.05).name('countersteer limit (g)');
 corneringFolder.add(settings, 'riderLeanInitiation', 0, 30, 0.5).name('rider hips lean start');
@@ -328,7 +299,7 @@ function readGamepad() {
   controls.rearBrake = gamepad.buttons[5]?.pressed ? 1 : 0;
   controls.steering = applyDeadzone(gamepad.axes[0] ?? 0);
   controls.riderForwardLean = -applyDeadzone(gamepad.axes[3] ?? 0); // +1 = rider forward
-  controls.riderSideLean = applyDeadzone(gamepad.axes[2] ?? 0); // +1 = lay the bike over to the right
+  controls.riderSideLean = applyDeadzone(gamepad.axes[2] ?? 0); // +1 = rider's body right, bike over to the left
   resetPressed = gamepad.buttons[0]?.pressed ?? false;
   trackStepPressed = (gamepad.buttons[15]?.pressed ? 1 : 0) - (gamepad.buttons[14]?.pressed ? 1 : 0);
   controllerDescription = gamepad.id;
@@ -351,7 +322,26 @@ let leanPivotHeight = 0;
 let physicsTimeAccumulator = 0;
 let lastFrameTime = performance.now();
 
+// ?view=side|front|rear|top|quarter parks the camera next to the bike (offsets in the bike's own axes) for
+// looking at the model instead of riding
+const inspectView = new URLSearchParams(window.location.search).get('view');
+const inspectOffsets: Record<string, [number, number, number]> = {
+  side: [0, 0.3, 3.2],
+  front: [3.4, 0.5, 0.3],
+  rear: [-3.4, 0.6, 0.3],
+  top: [0.01, 4, 0],
+  quarter: [2.3, 0.9, 2.5],
+};
+const inspectOffset = new THREE.Vector3();
+
 function updateCamera(frameSeconds: number, snapCamera: boolean) {
+  const offset = inspectView ? inspectOffsets[inspectView] : undefined;
+  if (offset) {
+    inspectOffset.set(...offset).applyQuaternion(bikeGroup.quaternion);
+    camera.position.copy(bikeGroup.position).add(inspectOffset);
+    camera.lookAt(bikeGroup.position.x, bikeGroup.position.y + 0.15, bikeGroup.position.z);
+    return;
+  }
   // In the air, follow the direction of travel so whips don't swing the camera. On the ground, heading
   // comes from the bike's side axis, which stays horizontal through front and back flips.
   const velocity = chassisBody.linvel();
@@ -391,23 +381,30 @@ function updateBikeVisuals(interpolation: number, frameSeconds: number) {
   bikeGroup.position.lerpVectors(previousBikePosition, currentBikePosition, interpolation);
   bikeGroup.quaternion.slerpQuaternions(previousBikeQuaternion, currentBikeQuaternion, interpolation);
 
-  riderPivot.position.copy(riderSeatPosition);
-  riderPivot.position.x += controls.riderForwardLean * 0.3;
-  riderPivot.position.z -= state.bikePressAmount * 0.12;
-  riderPivot.rotation.x = -THREE.MathUtils.degToRad(settings.bikePressDegrees) * state.bikePressAmount;
-
+  const axles = [new THREE.Vector3(), new THREE.Vector3()];
   for (let wheelIndex = 0; wheelIndex < vehicle.numWheels(); wheelIndex++) {
     const connectionPoint = vehicle.wheelChassisConnectionPointCs(wheelIndex)!;
     const suspensionLength = vehicle.wheelSuspensionLength(wheelIndex) ?? settings.suspensionRestLength;
-    wheelSteeringPivots[wheelIndex].position.set(connectionPoint.x, connectionPoint.y - suspensionLength, connectionPoint.z);
-    wheelSpinMeshes[wheelIndex].rotation.z = -state.wheelSpinAngles[wheelIndex];
+    axles[wheelIndex].set(connectionPoint.x, connectionPoint.y - suspensionLength, connectionPoint.z);
   }
-  // Show the handlebar angle, which on a leaned bike is less than the turn it makes on the ground
-  wheelSteeringPivots[frontWheelIndex].rotation.y = -state.handlebarRadians;
+  const speed = Math.abs(vehicle.currentVehicleSpeed());
+  const wantsToStand = state.isInAir || (speed > 5 && Math.abs(state.bodyLeanRadians) < THREE.MathUtils.degToRad(12));
+  riderStanding += ((wantsToStand ? 1 : 0) - riderStanding) * (1 - Math.exp(-4 * frameSeconds));
+  bikeModel.update({
+    rearAxle: axles[rearWheelIndex],
+    frontAxle: axles[frontWheelIndex],
+    handlebarRadians: state.handlebarRadians,
+    rearSpinRadians: state.wheelSpinAngles[rearWheelIndex],
+    frontSpinRadians: state.wheelSpinAngles[frontWheelIndex],
+    riderForward: controls.riderForwardLean,
+    riderPress: state.bikePressAmount,
+    riderPressRadians: THREE.MathUtils.degToRad(settings.bikePressDegrees),
+    riderStanding,
+  });
 
   // Roll the visible bike around the line where the tires touch the ground so the wheels stay planted,
   // or around the center of mass in the air. The pivot height blends so the switch doesn't jump.
-  const groundContactHeight = wheelSteeringPivots[rearWheelIndex].position.y - wheelRadius;
+  const groundContactHeight = axles[rearWheelIndex].y - wheelRadius;
   const targetPivotHeight = state.isInAir ? settings.centerOfMassHeight : groundContactHeight;
   leanPivotHeight += (targetPivotHeight - leanPivotHeight) * (1 - Math.exp(-8 * frameSeconds));
   leanPivot.position.y = leanPivotHeight;
@@ -456,7 +453,7 @@ function updateHud(frameSeconds: number) {
     `front brake ${state.brakeLevers[frontWheelIndex].toFixed(2)}${state.wheelLocked[frontWheelIndex] ? ' LOCKED' : ''}   ` +
     `rear brake ${state.brakeLevers[rearWheelIndex].toFixed(2)}${state.wheelLocked[rearWheelIndex] ? ' LOCKED' : ''}   ` +
     `steer ${controls.steering.toFixed(2)}   rider forward ${controls.riderForwardLean.toFixed(2)}   ` +
-    `bike press ${controls.riderSideLean.toFixed(2)}`;
+    `rider side ${controls.riderSideLean.toFixed(2)}`;
 }
 
 function frame(now: number) {

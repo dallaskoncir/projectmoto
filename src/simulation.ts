@@ -26,15 +26,17 @@ export const settings = {
   lockedTireGrip: 0.8, // share of its grip a locked tire drags with; ease the brake under this to unlock it
   lockedTireSideGrip: 0.5, // share of its sideways grip a locked tire keeps (knobs plowing the dirt)
 
-  frontGrip: 1.2, // lower than the rear: the front washes out first in a flat turn, so weight forward plants it
-  rearGrip: 1.4,
+  frontGrip: 1.32, // lower than the rear: the front washes out first in a flat turn, so weight forward plants it
+  rearGrip: 1.87,
   pressGripBonus: 0.25, // extra grip with the bike fully pressed down into a turn (side knobs dig into the dirt)
 
   // Cornering. Bike and rider together balance like an inverted pendulum: gravity pulls the lean over,
   // the tires' cornering force pushes it back up. The left stick asks for a lean and the rider's balance
   // steers the bars (countersteering first) to get there. The turn comes from the lean.
-  maxLeanAngleDegrees: 42, // bike-and-rider lean a full left stick asks for
+  maxLeanAngleDegrees: 48, // bike-and-rider lean a full left stick asks for
   pressExtraLeanDegrees: 10, // more lean a full left stick reaches while the right stick presses the bike into the turn
+  forwardExtraLeanDegrees: 8, // more lean a full left stick reaches with the rider forward (weight on the front tire)
+  leanGripUse: 0.8, // share of the tires' cornering grip the rider leans on; the rest is margin for bumps and throttle
   leanResponse: 6, // how quickly the bike gets to the lean the stick asks for
   leanPendulumHeight: 0.9, // meters from tires to the bike-and-rider center of mass; higher = lean changes more slowly
   steeringLockDegrees: 30, // handlebar limit; caps how tight a slow turn can be
@@ -42,22 +44,22 @@ export const settings = {
   footDabSpeed: 6, // meters per second; below this the inside foot (fully out at half this) stops the bike falling in past the lean you asked for
   countersteerLimitG: 0.3, // most sideways push away from the turn the balance uses to start a lean; the rider's hips do the rest
   riderLeanInitiation: 8, // radians/s^2 of lean the rider's hips can add when the countersteer is capped
-  riderSaveStrength: 5, // radians/s^2; how hard the rider can catch a sliding bike when you ease off the stick
+  riderSaveStrength: 9, // radians/s^2; how hard the rider can catch a sliding bike when you ease off the stick
   lowSideLeanDegrees: 60, // bike-and-rider lean past which the rider can't save it (not at foot-dab speeds)
   bikePressDegrees: 30, // how far a full right stick lays the bike over past the bike-and-rider lean (the rider's body moves the other way)
 
   riderPitchTorqueAir: 500,
-  airPitchDamping: 100,
+  airPitchDamping: 75,
   riderWeightShiftTorqueGround: 250, // about a real rider moving their body fore and aft; moves roughly 15% of the weight between the tires
   riderBodyResponse: 8, // how fast the rider moves around on the bike
   wheelInertia: 0.6, // per wheel, kg m^2; sets how much brake taps and throttle blips pitch the bike in the air (real MX rear wheel is about 0.6)
   scrubFullLeanDegrees: 30, // bike lean at the lip for a full scrub (a full right stick on its own gets there)
   scrubHeightAbsorb: 0.25, // share of upward takeoff speed a full scrub removes
-  maxWhipLeanDegrees: 70, // how far the rider lays the bike over in the air
-  whipLeanResponse: 5,
-  whipYawTorque: 300,
-  whipYawReturn: 500, // pulls the bike back in line with its direction of travel in the air
-  airYawDamping: 200,
+  maxWhipLeanDegrees: 85, // how far the rider lays the bike over in the air
+  whipLeanResponse: 7,
+  whipYawTorque: 550,
+  whipYawReturn: 600, // pulls the bike back in line with its direction of travel in the air
+  airYawDamping: 140,
 
   uprightAssistStrength: 4000,
   uprightAssistDamping: 400,
@@ -95,7 +97,7 @@ export const controls = {
   rearBrake: 0, // RB, 1 while held (the rear brake builds up from it)
   steering: 0, // left stick X, +1 = lean right
   riderForwardLean: 0, // right stick Y, +1 = rider forward
-  riderSideLean: 0, // right stick X, +1 = rider lays the bike over to the right (on the ground and in the air)
+  riderSideLean: 0, // right stick X, +1 = rider's body to the right, which lays the bike over to the left (on the ground and in the air)
 };
 
 await RAPIER.init();
@@ -534,9 +536,13 @@ function balanceAndSteer(forwardSpeed: number, groundBank: number) {
   // A berm banked into the turn lets the rider lean further over (relative to the ground it's the same lean)
   const turnSide = Math.sign(controls.steering) || Math.sign(bodyLean);
   const bankIntoTurn = groundBank * turnSide;
+  // Never ask for lean within a few degrees of the low-side, so a little overshoot doesn't put it down
   const stickLean = Math.min(
-    62,
-    settings.maxLeanAngleDegrees + settings.pressExtraLeanDegrees * pressIntoStick + THREE.MathUtils.radToDeg(Math.max(0, bankIntoTurn)),
+    settings.lowSideLeanDegrees - 6 + THREE.MathUtils.radToDeg(Math.max(0, bankIntoTurn)),
+    settings.maxLeanAngleDegrees +
+      settings.pressExtraLeanDegrees * pressIntoStick +
+      settings.forwardExtraLeanDegrees * Math.max(0, controls.riderForwardLean) +
+      THREE.MathUtils.radToDeg(Math.max(0, bankIntoTurn)),
   );
   // Nor more than the dirt can hold. Holding a lean takes g*tan(lean) of sideways force, which the bike's
   // geometry splits between the tires by where the center of mass sits, so whichever tire runs out first
@@ -560,8 +566,8 @@ function balanceAndSteer(forwardSpeed: number, groundBank: number) {
   // On a bank the ground itself pushes the bike into the turn by tan(bank) of its weight, on top of the
   // tires' grip. Off-camber (negative bank) takes it away.
   const corneringGrip = Math.max(0, flatCorneringGrip + Math.tan(bankIntoTurn));
-  // Keep a quarter of the tires' grip in reserve (front slip, a little throttle); the berm's push is solid
-  const gripLimitedLean = Math.atan(Math.max(0, 0.75 * flatCorneringGrip + Math.tan(bankIntoTurn)));
+  // Keep some of the tires' grip in reserve (front slip, a little throttle); the berm's push is solid
+  const gripLimitedLean = Math.atan(Math.max(0, settings.leanGripUse * flatCorneringGrip + Math.tan(bankIntoTurn)));
   const reachableLean = Math.min(THREE.MathUtils.degToRad(stickLean), 0.9 * lockLimitedLean, gripLimitedLean);
   const targetBodyLean = controls.steering * reachableLean;
 
@@ -718,17 +724,18 @@ export function physicsStep() {
   const engineTaper = THREE.MathUtils.clamp(1 - forwardSpeed / settings.topSpeed, 0, 1);
   updateBrakesAndEngine(throttle, engineTaper, forwardSpeed);
 
-  // The right stick lays the bike over the way it points, on the ground and in the air. On the ground the
-  // rider's body goes the other way, so the bike-and-rider lean (and the turn) stays the same: pressing the
-  // bike down into a turn puts it on its side knobs, pushing it upright keeps it on more grip, and pressing
-  // it over on a straight sets up a scrub.
+  // The right stick moves the rider's body the way it points, and the bike goes over the other way, on the
+  // ground and in the air (the opposite of the left stick). On the ground the body and bike balance out, so
+  // the bike-and-rider lean (and the turn) stays the same: body to the inside stands the bike up on more
+  // grip, body to the outside presses it down onto its side knobs, and on a straight it sets up a scrub.
+  const bikeLayOver = -controls.riderSideLean; // +1 = bike laid over to the right
   const riderBlend = 1 - Math.exp(-settings.riderBodyResponse * physicsTimestep);
-  state.bikePressAmount += (controls.riderSideLean - state.bikePressAmount) * riderBlend;
+  state.bikePressAmount += (bikeLayOver - state.bikePressAmount) * riderBlend;
   const bikePressLean = THREE.MathUtils.degToRad(settings.bikePressDegrees) * state.bikePressAmount;
 
   if (isInAir) {
-    // Whip: the right stick lays the bike over further, nothing to balance against
-    const whipLean = controls.riderSideLean * THREE.MathUtils.degToRad(settings.maxWhipLeanDegrees);
+    // Whip: the rider throws the bike over further, nothing to balance against
+    const whipLean = bikeLayOver * THREE.MathUtils.degToRad(settings.maxWhipLeanDegrees);
     state.bikeLeanRadians += (whipLean - state.bikeLeanRadians) * (1 - Math.exp(-settings.whipLeanResponse * physicsTimestep));
     state.bodyLeanRadians = state.bikeLeanRadians - bikePressLean;
     state.bodyLeanRate = 0;
@@ -848,10 +855,10 @@ export function physicsStep() {
     const pitchRate = bikeAngularVelocity.dot(bikeSideAxis);
     controlTorque.addScaledVector(bikeSideAxis, -settings.airPitchDamping * pitchRate);
 
-    // Whip yaw: the right stick swings the bike sideways, and a spring pulls it back in line with the
-    // direction of travel. Stick right yaws the nose right, which is negative around world up.
+    // Whip yaw: the bike swings sideways the way it's laid over, and a spring pulls it back in line with the
+    // direction of travel. Laid over right yaws the nose right, which is negative around world up.
     const yawTorque =
-      -controls.riderSideLean * settings.whipYawTorque + settings.whipYawReturn * yawFromTravelRadians() - settings.airYawDamping * yawRate;
+      -bikeLayOver * settings.whipYawTorque + settings.whipYawReturn * yawFromTravelRadians() - settings.airYawDamping * yawRate;
     controlTorque.addScaledVector(worldUp, yawTorque);
   }
 
