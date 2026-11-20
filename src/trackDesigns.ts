@@ -26,8 +26,9 @@ export const trackDesigns: TrackDesign[] = [
     ],
     straights: [
       [
-        { kind: 'tabletop' },
-        { kind: 'big double', takeoff: 2.6, lipDegrees: 30, gap: 22, landing: 4.2, landingDegrees: 13, runUp: 37 },
+        // The big one: a tall, steep tabletop with a long, curved landing
+        { kind: 'tabletop', height: 5.5, lipDegrees: 33, deck: 27, landingDegrees: 34, landingBottomDegrees: 12 },
+        { kind: 'big double', takeoff: 2.6, lipDegrees: 30, gap: 22, landing: 4.2, landingDegrees: 13, runUp: 30 },
       ],
       [{ kind: 'rollers', count: 2, height: 0.6, spacing: 7.4 }, { kind: 'tabletop' }],
       [{ kind: 'step-up', deck: 2.5 }],
@@ -41,7 +42,7 @@ export const trackDesigns: TrackDesign[] = [
     ],
   },
   {
-    // Fast and open: big sweepers, a long start straight with a big double, a quick S on the far side
+    // Fast and open: big sweepers, a long start straight with the whip jump, a quick S on the far side
     name: 'Long Meadow MX',
     ...motocross,
     corners: [
@@ -56,7 +57,8 @@ export const trackDesigns: TrackDesign[] = [
     ],
     straights: [
       [
-        { kind: 'big double', takeoff: 2.6, lipDegrees: 30, gap: 24, landing: 4.2, landingDegrees: 13, runUp: 40 },
+        // Whip jump: a tall, steep lip for hang time (about 2.5 s), and a long landing to come down crossed up on
+        { kind: 'whip jump', takeoff: 4.5, lipDegrees: 40, gap: 32, landing: 5.5, landingDegrees: 36, landingBottomDegrees: 10, runUp: 15 },
         { kind: 'rollers', count: 3, height: 0.5, spacing: 7 },
       ],
       [{ kind: 'double' }],
@@ -81,9 +83,9 @@ export const trackDesigns: TrackDesign[] = [
       { x: 40, z: -35, radius: 13 },
       { x: 30, z: 40, radius: 13 },
       { x: 115, z: 55, radius: 14 },
-      { x: 100, z: 118, radius: 15 },
-      { x: -30, z: 100, radius: 14 },
-      { x: -50, z: 30, radius: 13 },
+      { x: 118, z: 120, radius: 15 },
+      { x: -58, z: 112, radius: 14 },
+      { x: -50, z: 24, radius: 13 },
       { x: -118, z: 40, radius: 14, insideBerm: true },
     ],
     straights: [
@@ -95,7 +97,8 @@ export const trackDesigns: TrackDesign[] = [
       [{ kind: 'rollers', count: 3, height: 0.6, spacing: 7 }],
       [{ kind: 'step-up', deck: 3 }],
       [],
-      [{ kind: 'step-up' }, { kind: 'rollers', count: 3, height: 0.5, spacing: 7 }],
+      // The big one: a step-up hit in 3rd gear wide open, up onto a tall deck
+      [{ kind: 'step-up', takeoff: 2.4, lipDegrees: 30, rise: 1.6, gap: 31, deck: 14, landingDegrees: 30, landingBottomDegrees: 12, runUp: 45 }],
       [{ kind: 'rollers', count: 3, height: 0.6, spacing: 7 }],
       [],
       [{ kind: 'double' }],

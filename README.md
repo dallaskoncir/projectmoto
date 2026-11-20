@@ -29,8 +29,8 @@ browser's "standard" mapping are used, so wheels and pedals are ignored.
 | LT | Brakes, both wheels together (75% front by default) |
 | RB | Rear brake on its own (builds up while held), when combined brakes are switched off in the Brakes panel |
 | LB | Clutch: hold to free the engine from the rear wheel (coast with no engine braking, or rev it up); let it out with the revs up for a kick of drive (a clutch dump). Pulling away doesn't need it |
-| Left stick | Lean the bike and rider into a turn. The rider countersteers to get there. About 85% stick is the tires' limit; past it the rear steps out and the bike slides around tighter, scrubbing speed. Hold it there too long and it low-sides. A berm lets the bike lean further and corner harder than flat ground, so ride up into it to carry more speed; it holds full stick, but turning much tighter than the berm drops you off its face to the inside, where the rear steps out until you stand the bike up. In the air it lays the bike over: hold it through the lip to start a whip |
-| Right stick left/right | Move the rider's body that way, and the bike goes over the other way: stand it up or press it down in a turn, scrub off a lip, whip in the air (with the left stick, the full whip with more swing) |
+| Left stick | Lean the bike and rider into a turn. The rider countersteers to get there. About 85% stick is the tires' limit; past it the rear steps out and the bike slides around tighter, scrubbing speed. Hold it there too long and it low-sides. A berm lets the bike lean further and corner harder than flat ground, so ride up into it to carry more speed; it holds full stick, but turning much tighter than the berm drops you off its face to the inside, where the rear steps out until you stand the bike up. Whips come from the takeoff: lean into the face and lay it over at the lip, and the bike leaves swinging over, harder the more it's leaned and the bigger the jump. It keeps its lay-over (and goes right over or upside down if you let it swing), so hold the sticks the other way in time and the rider brings it back up and settles it straight. Gas brings it back too: the engine and rear wheel spinning stand the bike up on their own, and with the sticks pulled back as well it comes back fastest. It doesn't fight a whip being thrown: it builds in just after the lip and stays off while you push the bike further over, so scrub with the gas on and keep pushing to hold a whip out. In the air the sticks only push a little further over. A small lean straightens up on its own |
+| Right stick left/right | Move the rider's body that way, and the bike goes over the other way: stand it up or press it down in a turn, scrub off a lip, lay it over at the lip to throw a whip, push or pull the bike over in the air (with the left stick, harder). A scrub or whip doesn't come back on its own: push the other way in the air to stand the bike back up |
 | Right stick up/down | Rider forward/back: weight shift on the ground, pitch in the air. Preload: hold it back up the face of a jump and flick it forward at the lip to pop higher and further |
 | A / B | Shift up / down (manual gearbox, the default; switch to automatic in the Engine folder of the panel) |
 | View | Back to the start |
@@ -59,7 +59,15 @@ fraction of a second, and a held lean key stops at the tires' limit (both adjust
 Six fixed tracks, picked from the Track folder in the panel or with the D-pad:
 
 - **Motocross:** Ridgeback, Long Meadow and Quarry. Long straights, sweeping bermed corners, big doubles,
-  tabletops, step-ups and rollers.
+  tabletops, step-ups and rollers, and one big jump each:
+  - **Ridgeback:** a 5.5 m tabletop with a steep 33° face, a long deck and a curved landing at the start of
+    the top straight. Full gas lands down the landing; come up short and you land on the deck.
+  - **Long Meadow:** the whip jump on the start straight: a tall, steep 40° lip over a 32 m gap to a long
+    curved landing, for about 2.5 s of air. Pin it out of the first corner, lean into the face with the left
+    stick (don't scrub it, or you'll case it), and you can throw it right over and bring it back.
+  - **Quarry:** a step-up on the bottom straight, hit in 3rd gear wide open, 31 m up onto a 4 m deck. Back
+    off and you case it (2nd on the limiter only just makes the knuckle). Brake hard after the landing for the
+    corner.
 - **Supercross:** Harbor, Dome and Night. Compact stadium layouts with tight 180s, rhythm sections, whoops and
   triples. Night's long back straight has a step-on, step-off: jump up onto a 3 m plateau, get on the gas
   across the top, and jump off the kicker at the far end over a gap to the landing.

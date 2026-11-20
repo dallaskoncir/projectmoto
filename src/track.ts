@@ -12,13 +12,15 @@ export const centerlineSpacing = 0.5;
 const featureReach = trackHalfWidth + 10; // how far from the centerline track shaping reaches
 
 // A feature on a straight. Jumps without sizes are sized for the speed their run-up gives; `runUp` adds
-// flat ground before a feature on top of the usual spacing.
+// flat ground before a feature on top of the usual spacing. `speed` sizes a tabletop or step-up for that lip
+// speed instead (past the track's usual limit, for a big one), as long as the run-up can reach it.
+// `landingBottomDegrees` curves a landing from landingDegrees at the knuckle to that at the bottom.
 export type FeatureSpec = { runUp?: number } & (
-  | { kind: 'tabletop'; lipDegrees?: number }
+  | { kind: 'tabletop'; lipDegrees?: number; height?: number; deck?: number; speed?: number; landingDegrees?: number; landingBottomDegrees?: number }
   | { kind: 'double'; lipDegrees?: number; takeoff?: number }
-  | { kind: 'step-up'; takeoff?: number; rise?: number; deck?: number }
+  | { kind: 'step-up'; takeoff?: number; rise?: number; deck?: number; lipDegrees?: number; speed?: number; gap?: number; landingDegrees?: number; landingBottomDegrees?: number }
   | { kind: 'step-on-off'; takeoff?: number; deckHeight?: number; deck?: number }
-  | { kind: 'big double' | 'triple'; takeoff: number; lipDegrees: number; gap: number; landing: number; landingDegrees: number }
+  | { kind: 'big double' | 'triple' | 'whip jump'; takeoff: number; lipDegrees: number; gap: number; landing: number; landingDegrees: number; landingBottomDegrees?: number }
   | { kind: 'rollers' | 'whoops'; count: number; height: number; spacing: number }
   | { kind: 'rhythm'; count: number; height: number; lipDegrees?: number; backDegrees?: number }
 );
@@ -41,7 +43,7 @@ export type TrackDesign = {
 // ---------- Jump profiles ----------
 // A profile is the height of a feature at distance u along the track from where it starts.
 
-export type JumpKind = 'big double' | 'triple' | 'double' | 'tabletop' | 'step-up' | 'step-on-off' | 'rollers' | 'rhythm' | 'whoops';
+export type JumpKind = 'big double' | 'triple' | 'whip jump' | 'double' | 'tabletop' | 'step-up' | 'step-on-off' | 'rollers' | 'rhythm' | 'whoops';
 
 export type Jump = {
   kind: JumpKind;
@@ -64,17 +66,39 @@ function takeoffFace(height: number, lipAngle: number) {
   return { length, height: (u: number) => radius - Math.sqrt(Math.max(0, radius * radius - u * u)) };
 }
 
-// Landing: a straight slope from the knuckle down to the ground
-function landingSlope(height: number, angle: number) {
-  const length = height / Math.tan(angle);
-  return { length, height: (x: number) => (x >= length ? 0 : height * (1 - x / length)) };
+// Landing: a straight slope from the knuckle down to the ground. With a bottom angle it curves instead,
+// steep at the knuckle and flattening out toward the bottom (the angle changes evenly along it), so it's soft
+// to land near the top and an overjump comes down on a flatter, harder part instead of off the end.
+function landingSlope(height: number, angle: number, bottomAngle = angle) {
+  if (Math.abs(bottomAngle - angle) < 1e-6) {
+    const length = height / Math.tan(angle);
+    return { length, height: (x: number) => (x >= length ? 0 : height * (1 - x / length)) };
+  }
+  // Drop over x is the integral of tan(angle along it), which comes out in log-cosines
+  const logCos = (a: number) => Math.log(Math.cos(a));
+  const length = (height * (bottomAngle - angle)) / (logCos(angle) - logCos(bottomAngle));
+  return {
+    length,
+    height: (x: number) => {
+      if (x >= length) return 0;
+      const angleHere = angle + ((bottomAngle - angle) * x) / length;
+      return Math.max(0, height - (length / (bottomAngle - angle)) * (logCos(angle) - logCos(angleHere)));
+    },
+  };
 }
 
-function tabletop(faceHeight: number, lipAngle: number, deckLength: number, landingAngle: number, designSpeed: number): Omit<Jump, 'start'> {
+function tabletop(
+  faceHeight: number,
+  lipAngle: number,
+  deckLength: number,
+  landingAngle: number,
+  designSpeed: number,
+  landingBottomAngle = landingAngle,
+): Omit<Jump, 'start'> {
   const kind: JumpKind = 'tabletop';
   const face = takeoffFace(faceHeight, lipAngle);
   const knuckle = face.length + deckLength;
-  const landing = landingSlope(faceHeight, landingAngle);
+  const landing = landingSlope(faceHeight, landingAngle, landingBottomAngle);
   return {
     kind,
     length: knuckle + landing.length,
@@ -97,6 +121,7 @@ function gapJump(
   landingAngle: number,
   designSpeed: number,
   landingDeck = 0,
+  landingBottomAngle = landingAngle,
 ): Omit<Jump, 'start'> {
   const face = takeoffFace(takeoffHeight, lipAngle);
   const lip = face.length;
@@ -104,7 +129,7 @@ function gapJump(
   const knuckle = lip + gap;
   const landingWallStart = knuckle - landingHeight / Math.tan(backsideAngle);
   const deckEnd = knuckle + landingDeck;
-  const landingSlopeAfterDeck = landingSlope(landingHeight, landingAngle);
+  const landingSlopeAfterDeck = landingSlope(landingHeight, landingAngle, landingBottomAngle);
   return {
     kind,
     length: deckEnd + landingSlopeAfterDeck.length,
@@ -579,15 +604,26 @@ function placeFeatures(design: TrackDesign, straights: { start: number; end: num
   return jumps.sort((a, b) => a.start - b.start);
 }
 
+// A jump sized for a set lip speed has to be reachable from its run-up (within a little)
+function sizedSpeed(speed: number | undefined, designSpeed: number, runUpSpeed: number, where: string) {
+  if (speed === undefined) return designSpeed;
+  if (speed > runUpSpeed + 0.5) throw new Error(`${where}: a jump sized for ${speed.toFixed(1)} m/s, but the run-up gives ${runUpSpeed.toFixed(1)}`);
+  return speed;
+}
+
 // designSpeed sizes the jumps that size themselves; a fixed-size gap only has to be clearable from runUpSpeed
 function buildFeature(spec: FeatureSpec, designSpeed: number, runUpSpeed: number, maxHeight: number, where: string): Omit<Jump, 'start'> {
   switch (spec.kind) {
     case 'tabletop': {
       // A tabletop's landing is as tall as its deck, so the whole jump grows to what the landing needs
+      const speed = sizedSpeed(spec.speed, designSpeed, runUpSpeed, where);
       const lipAngle = (spec.lipDegrees ?? 26) * degrees;
-      const deck = Math.max(3, 0.75 * flightDistance(designSpeed, lipAngle, 1.9, 1.9));
-      const faceHeight = landingHeightFor(designSpeed, lipAngle, Math.min(1.9, maxHeight), deck, maxHeight);
-      return tabletop(faceHeight, lipAngle, deck, landingAngle, designSpeed);
+      const height = spec.height ?? 1.9;
+      const deck = spec.deck ?? Math.max(3, 0.75 * flightDistance(speed, lipAngle, height, height));
+      const faceHeight = spec.height ?? landingHeightFor(speed, lipAngle, Math.min(1.9, maxHeight), deck, maxHeight);
+      const topAngle = spec.landingDegrees === undefined ? landingAngle : spec.landingDegrees * degrees;
+      const bottomAngle = spec.landingBottomDegrees === undefined ? topAngle : spec.landingBottomDegrees * degrees;
+      return tabletop(faceHeight, lipAngle, deck, topAngle, speed, bottomAngle);
     }
     case 'double': {
       // Sized so a full scrub at the design speed still clears it, and without a scrub it lands well down
@@ -608,13 +644,28 @@ function buildFeature(spec: FeatureSpec, designSpeed: number, runUpSpeed: number
     }
     case 'step-up': {
       const takeoffHeight = spec.takeoff ?? 1.3;
-      const lipAngle = 29 * degrees;
+      const lipAngle = (spec.lipDegrees ?? 29) * degrees;
       const landingHeight = takeoffHeight + (spec.rise ?? 0.75);
-      const gap = 0.7 * flightDistance(designSpeed, lipAngle, takeoffHeight, landingHeight);
-      if (gap < (takeoffHeight + landingHeight) / Math.tan(backsideAngle) + 1) {
-        throw new Error(`${where}: a step-up needs more speed than ${designSpeed.toFixed(1)} m/s`);
+      // A set gap only has to be clearable from the run-up; otherwise the gap is sized for the lip speed
+      let speed: number;
+      let gap: number;
+      if (spec.gap !== undefined) {
+        const clearSpeed = speedToClear(spec.gap, lipAngle, takeoffHeight, landingHeight);
+        if (clearSpeed > runUpSpeed + 0.5) {
+          throw new Error(`${where}: the step-up needs ${clearSpeed.toFixed(1)} m/s but the run-up gives ${runUpSpeed.toFixed(1)}`);
+        }
+        gap = spec.gap;
+        speed = clearSpeed * 1.04;
+      } else {
+        speed = sizedSpeed(spec.speed, designSpeed, runUpSpeed, where);
+        gap = 0.7 * flightDistance(speed, lipAngle, takeoffHeight, landingHeight);
       }
-      return gapJump('step-up', takeoffHeight, lipAngle, gap, landingHeight, landingAngle, designSpeed, spec.deck ?? 6.5);
+      if (gap < (takeoffHeight + landingHeight) / Math.tan(backsideAngle) + 1) {
+        throw new Error(`${where}: a step-up needs more speed than ${speed.toFixed(1)} m/s`);
+      }
+      const topAngle = spec.landingDegrees === undefined ? landingAngle : spec.landingDegrees * degrees;
+      const bottomAngle = spec.landingBottomDegrees === undefined ? topAngle : spec.landingBottomDegrees * degrees;
+      return gapJump('step-up', takeoffHeight, lipAngle, gap, landingHeight, topAngle, speed, spec.deck ?? 6.5, bottomAngle);
     }
     case 'step-on-off': {
       // Step on: like a step-up, sized so the design speed lands on the deck past the knuckle. The deck is
@@ -643,13 +694,16 @@ function buildFeature(spec: FeatureSpec, designSpeed: number, runUpSpeed: number
       return stepOnStepOff(takeoffHeight, lipAngle, gapOn, deckHeight, deckLength, kickHeight, kickAngle, gapOff, landingHeight, designSpeed, deckSpeed);
     }
     case 'big double':
-    case 'triple': {
+    case 'triple':
+    case 'whip jump': {
       const lipAngle = spec.lipDegrees * degrees;
       const clearSpeed = speedToClear(spec.gap, lipAngle, spec.takeoff, spec.landing);
       if (clearSpeed > runUpSpeed + 0.5) {
         throw new Error(`${where}: the ${spec.kind} needs ${clearSpeed.toFixed(1)} m/s but the run-up gives ${runUpSpeed.toFixed(1)}`);
       }
-      const jump = gapJump(spec.kind, spec.takeoff, lipAngle, spec.gap, spec.landing, spec.landingDegrees * degrees, clearSpeed * 1.04);
+      const landingAngle = spec.landingDegrees * degrees;
+      const landingBottomAngle = (spec.landingBottomDegrees ?? spec.landingDegrees) * degrees;
+      const jump = gapJump(spec.kind, spec.takeoff, lipAngle, spec.gap, spec.landing, landingAngle, clearSpeed * 1.04, 0, landingBottomAngle);
       jump.description = `${spec.kind}: ${spec.gap.toFixed(0)} m gap, needs ${clearSpeed.toFixed(1)} m/s at the lip, run-up gives ${runUpSpeed.toFixed(1)}`;
       return jump;
     }

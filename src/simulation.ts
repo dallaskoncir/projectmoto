@@ -80,10 +80,19 @@ export const settings = {
   preloadChargeSeconds: 0.35, // how long the stick has to be held back to fully load the suspension
   preloadEarlySeconds: 0.3, // how long before the bike leaves the ground the forward flick still counts
   preloadLateSeconds: 0.1, // and how long after
-  maxWhipLeanDegrees: 85, // how far the rider lays the bike over in the air
-  leftStickWhipShare: 0.5, // share of the full whip the left stick gives on its own; the right stick adds the rest and swings it further
-  whipLeanResponse: 7,
-  whipYawTorque: 550,
+  leftStickWhipShare: 0.5, // share of the rider's push in the air the left stick gives on its own; the right stick gives the rest
+  whipCarryShare: 0.25, // share of how fast the bike was leaning over on the face that it carries into the air (the rider's body soaks up the rest)
+  whipLipKickDegrees: 80, // degrees/s of swing the lip throws into a bike laid flat over as it leaves (less the more upright it is, and on smaller kicks)
+  whipAirPushDegrees: 120, // degrees/s² the rider can push the bike further over with in the air, at full right stick (both sticks: 1.5×)
+  whipReturnSpeedDegrees: 360, // degrees/s the rider brings the bike back toward upright with both sticks pulled fully back (one stick: two thirds); it settles upright, not past it
+  whipReturnResponse: 8, // how quickly a full pull back takes over from the swing the bike has (per second)
+  whipGyroDegrees: 150, // gas in the air: the rear wheel and crank spinning bring the bike back toward upright at up to this many degrees/s (full gas, revs near the limiter), on top of any pull back
+  whipGyroResponse: 3, // and how quickly that spin takes the swing out (per second, at full gas and revs)
+  whipGyroDelaySeconds: 0.4, // the gyro builds in over this long after takeoff, so the bike keeps the swing it left the lip with
+  whipSelfRightDegrees: 20, // with the sticks let go, a bike leaned less than this eases back upright on its own (the rider straightens a small lean without thinking); a bigger lay-over stays put
+  whipAirDamping: 0.8, // how fast a swing dies off on its own in the air (per second, the spinning wheels steady it): the bike keeps its lay-over
+  whipBarDegrees: 25, // bars counter-steered against the whip laid flat over (just for show: the front wheel lands straight)
+  whipYawTorque: 300, // swings the nose sideways with the lay-over, laid flat over
   whipYawReturn: 600, // pulls the bike back in line with its direction of travel in the air
   airYawDamping: 140,
 
@@ -262,6 +271,8 @@ const flatSideAxis = new THREE.Vector3();
 const previousVelocity = new THREE.Vector3();
 const slideVelocity = new THREE.Vector3();
 let wasInAir = false;
+let whipLeanRate = 0; // how fast the bike is swinging over in the air, radians per second
+let groundLeanRate = 0; // how fast the bike was leaning over on the ground, carried into the air at takeoff
 let currentAirTime = 0;
 let takeoffScrubPercent = 0;
 let takeoffPreloadPercent = 0;
@@ -293,13 +304,15 @@ function showStatus(message: string, seconds: number) {
 
 // Puts the bike on the track, pointing the way the track runs: at the start, or (after a crash) at the
 // centerline a few meters back from a given spot
-const gapJumpKinds = new Set(['double', 'triple', 'big double', 'step-up', 'step-on-off']);
+const gapJumpKinds = new Set(['double', 'triple', 'big double', 'whip jump', 'step-up', 'step-on-off']);
 
 export function resetBike(nearX?: number, nearZ?: number) {
   contactsAreStale = true;
   state.crashTimeRemaining = 0;
   bobbleTimeRemaining = 0;
   wasInAir = false;
+  whipLeanRate = 0;
+  groundLeanRate = 0;
   state.statusTimeRemaining = 0;
   const sampleCount = track.centerlineX.length;
   const backUpSamples = 16; // 8 m
@@ -1016,17 +1029,61 @@ export function physicsStep() {
   state.bikePressAmount += (bikeLayOver - state.bikePressAmount) * riderBlend;
   const bikePressLean = THREE.MathUtils.degToRad(settings.bikePressDegrees) * state.bikePressAmount;
 
-  // Whip: in the air the left stick keeps meaning "lean", so held through the lip it lays the bike over and
-  // starts a whip on its own. The right stick (body the other way) lays it over the rest of the way and
-  // swings it further. Together they can ask for more swing than either alone; the lay-over tops out.
-  const whipAmount = controls.steering * settings.leftStickWhipShare + bikeLayOver; // +1 = bike over to the right
+  // Whip: the swing comes from the takeoff. The bike leaves the lip with some of the swing it had on the
+  // face, and the lip throws a leaned bike further over (more the further it's leaned and the harder
+  // the kick), so leaning into the face and laying it over at the lip throws a big whip. In the air the
+  // rider can only push on it: the left stick keeps meaning "lean" and the right stick (body the other way)
+  // pushes harder. Pushing it further over is weak, enough for a small whip off a straight takeoff; pulling
+  // it back toward upright catches the swing and brings it up. Let go and the bike keeps its lay-over and
+  // most of its swing, right over and upside down.
+  const whipAmount = controls.steering * settings.leftStickWhipShare + bikeLayOver; // +1 = pushing the bike over to the right
   if (isInAir) {
-    // Nothing to balance against in the air, so the bike goes straight to the lay-over asked for
-    const whipLean = THREE.MathUtils.clamp(whipAmount, -1, 1) * THREE.MathUtils.degToRad(settings.maxWhipLeanDegrees);
-    state.bikeLeanRadians += (whipLean - state.bikeLeanRadians) * (1 - Math.exp(-settings.whipLeanResponse * physicsTimestep));
+    if (!wasInAir) {
+      const kick = THREE.MathUtils.clamp(velocity.y / 6, 0, 1.5);
+      whipLeanRate = settings.whipCarryShare * groundLeanRate + Math.sin(state.bikeLeanRadians) * kick * THREE.MathUtils.degToRad(settings.whipLipKickDegrees);
+    }
+    const pushAmount = THREE.MathUtils.clamp(whipAmount, -1.5, 1.5);
+    const isNearUpright = Math.abs(state.bikeLeanRadians) < THREE.MathUtils.degToRad(1);
+    const isPullingBack = pushAmount * Math.sin(state.bikeLeanRadians) < 0 && !isNearUpright;
+    const pull = isPullingBack ? Math.abs(pushAmount) / 1.5 : 0;
+    if (!isPullingBack) {
+      whipLeanRate += pushAmount * THREE.MathUtils.degToRad(settings.whipAirPushDegrees) * physicsTimestep;
+      // Sticks let go with only a small lean: the rider straightens it up without thinking
+      const selfRight = (1 - THREE.MathUtils.smoothstep(Math.abs(pushAmount), 0.1, 0.3)) *
+        (1 - THREE.MathUtils.smoothstep(Math.abs(state.bikeLeanRadians), THREE.MathUtils.degToRad(settings.whipSelfRightDegrees), THREE.MathUtils.degToRad(settings.whipSelfRightDegrees * 1.5)));
+      if (selfRight > 0) whipLeanRate += (-2.5 * state.bikeLeanRadians - whipLeanRate) * (1 - Math.exp(-4 * selfRight * physicsTimestep));
+    }
+    // Bringing it back. Pulling the sticks back, the rider catches the swing and brings the bike up at a
+    // steady speed. Engine gyro: on the gas, the rear wheel and crank spin and stand the bike back up on
+    // their own (the yaw coming back in line turns into roll toward upright), stronger the more the engine
+    // revs; with a pull back too it comes back fastest. Either way it eases in as it comes upright, so it
+    // settles straight instead of going over the other way. The gyro doesn't fight a whip being thrown: it
+    // builds in over the first moment off the lip (the bike keeps the swing it left with), and it's off
+    // while the sticks push the bike further over, so scrub with the gas on and push to hold a whip out.
+    const outwardPush = isPullingBack ? 0 : Math.abs(pushAmount) / 1.5;
+    const gyroBuildIn = THREE.MathUtils.smoothstep(timeSinceTakeoff, 0, Math.max(settings.whipGyroDelaySeconds, 0.001));
+    const gyro = throttle * THREE.MathUtils.clamp(state.engineRpm / settings.revLimitRpm, 0, 1) ** 2 *
+      gyroBuildIn * (1 - THREE.MathUtils.smoothstep(outwardPush, 0.1, 0.4));
+    const comeBackResponse = settings.whipReturnResponse * pull + settings.whipGyroResponse * gyro;
+    if (comeBackResponse > 0 && !isNearUpright) {
+      const comeBackSpeed = Math.min(
+        THREE.MathUtils.degToRad(settings.whipReturnSpeedDegrees * pull + settings.whipGyroDegrees * gyro),
+        5 * Math.abs(state.bikeLeanRadians),
+      );
+      const comeBackRate = -Math.sign(state.bikeLeanRadians) * comeBackSpeed;
+      whipLeanRate += (comeBackRate - whipLeanRate) * (1 - Math.exp(-comeBackResponse * physicsTimestep));
+    }
+    whipLeanRate -= settings.whipAirDamping * whipLeanRate * physicsTimestep;
+    state.bikeLeanRadians += whipLeanRate * physicsTimestep;
+    // Keep it within one turn either way (right round comes back to upright)
+    if (state.bikeLeanRadians > Math.PI) state.bikeLeanRadians -= 2 * Math.PI;
+    else if (state.bikeLeanRadians < -Math.PI) state.bikeLeanRadians += 2 * Math.PI;
     state.bodyLeanRadians = state.bikeLeanRadians - bikePressLean;
     state.bodyLeanRate = 0;
-    state.handlebarRadians = 0;
+    // The rider counter-steers the whip: the bars turn away from the side the bike is laid over to (the
+    // opposite way to the rear), and straighten as it comes back
+    const whipBars = -THREE.MathUtils.degToRad(settings.whipBarDegrees) * Math.sin(state.bikeLeanRadians);
+    state.handlebarRadians += (whipBars - state.handlebarRadians) * (1 - Math.exp(-15 * physicsTimestep));
     vehicle.setWheelSteering(frontWheelIndex, 0);
     state.rearSlideAmount = 0;
   } else {
@@ -1047,7 +1104,10 @@ export function physicsStep() {
     // The bike can't lie flatter than where the pegs and bars touch the ground
     // (further over on a berm, whose face is tilted up to meet them)
     const pegsDownLean = maxBikeLean + Math.max(0, bankIntoTurn);
+    const previousBikeLean = state.bikeLeanRadians;
     state.bikeLeanRadians = THREE.MathUtils.clamp(state.bodyLeanRadians + bikePressLean, -pegsDownLean, pegsDownLean);
+    const measuredLeanRate = (state.bikeLeanRadians - previousBikeLean) / physicsTimestep;
+    groundLeanRate += (measuredLeanRate - groundLeanRate) * (1 - Math.exp(-physicsTimestep / 0.03));
     const isLowSide =
       Math.abs(state.bodyLeanRadians) > THREE.MathUtils.degToRad(settings.lowSideLeanDegrees) + Math.max(0, bankIntoTurn);
     if (balanceWeight > 0.5 && footWeight < 0.5 && isLowSide) {
@@ -1154,9 +1214,10 @@ export function physicsStep() {
     controlTorque.addScaledVector(bikeSideAxis, -settings.airPitchDamping * pitchRate);
 
     // Whip yaw: the bike swings sideways the way it's laid over, and a spring pulls it back in line with the
-    // direction of travel. Laid over right yaws the nose right, which is negative around world up.
-    const yawTorque =
-      -THREE.MathUtils.clamp(whipAmount, -1.5, 1.5) * settings.whipYawTorque + settings.whipYawReturn * yawFromTravelRadians() - settings.airYawDamping * yawRate;
+    // direction of travel, so it comes back in line as the rider straightens it up.
+    // Laid over right yaws the nose right, which is negative around world up.
+    const layOverShare = Math.sin(state.bikeLeanRadians);
+    const yawTorque = -layOverShare * settings.whipYawTorque + settings.whipYawReturn * yawFromTravelRadians() - settings.airYawDamping * yawRate;
     controlTorque.addScaledVector(worldUp, yawTorque);
   }
 
