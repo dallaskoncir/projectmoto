@@ -18,7 +18,7 @@ export const settings = {
   gearbox: 'manual' as 'automatic' | 'manual',
   frontSprocket: 13,
   rearSprocket: 50,
-  enginePowerScale: 0.55, // share of a stock YZ250F's torque at the rear wheel (1 = stock); the jumps are sized for about this
+  enginePowerScale: 0.66, // share of a stock YZ250F's torque at the rear wheel (1 = stock); flat out it reaches most lips a bit faster than they need, so roll off to match
   revLimitRpm: 14000,
   autoUpshiftRpm: 12500, // automatic shifts up here, near peak power
   autoDownshiftRpm: 8000, // and down when the revs drop under this (if the gear below has room)
@@ -26,6 +26,8 @@ export const settings = {
   clutchBiteSeconds: 0.25, // how quickly the clutch drags a revved engine down to the wheel's speed when let out (a clutch dump)
   engineBrakingTorque: 2, // newton meters at the crank at the rev limit, off the throttle; less at lower revs
   dragArea: 1.4, // air drag (drag coefficient times frontal area, m^2); more than a real bike's ~0.7 so, with the power scaled down, the top end pulls like the speeds the jumps were sized for
+  wheelieLimitDegrees: 35, // nose-up off the ground at which the rider has rolled right off the gas (easing off from 10 degrees under), so the bike doesn't loop out
+  wheelieSaveTorque: 300, // newton meters of nose-down the rider (weight forward, a tap of rear brake) puts in past the wheelie limit
   // Brakes. LT is the front brake and RB the rear, which builds up while held. Combined: LT works both,
   // split by combinedFrontShare, and RB does nothing.
   frontBrakeForce: 1500, // newtons at full LT; about all the front tire can take braking upright on flat dirt
@@ -62,6 +64,7 @@ export const settings = {
   countersteerLimitG: 0.3, // most sideways push away from the turn the balance uses to start a lean; the rider's hips do the rest
   riderLeanInitiation: 8, // radians/s^2 of lean the rider's hips can add when the countersteer is capped
   riderSaveStrength: 9, // radians/s^2; how hard the rider can catch a sliding bike when you ease off the stick
+  lateralJoltLimit: 1.3, // sideways acceleration the lean responds to, as a share of what the tires and bank can hold; harder jolts from the ground don't tip the bike
   lowSideLeanDegrees: 60, // bike-and-rider lean past which the rider can't save it (not at foot-dab speeds)
   bikePressDegrees: 30, // how far a full right stick lays the bike over past the bike-and-rider lean (the rider's body moves the other way)
 
@@ -496,10 +499,10 @@ function applyGroundSidePush() {
 export const gearRatios = [30 / 14, 28 / 16, 26 / 18, 22 / 18, 25 / 24];
 const primaryReduction = 57 / 17;
 const drivetrainEfficiency = 0.9;
-// Crank torque (newton meters) by rpm, shaped like a stock 250F: soft down low, pulling hardest around
-// 10,500 and still making power to the limiter (about 42 hp at 12,500)
+// Crank torque (newton meters) by rpm, shaped like a modern 250F with a strong bottom end: it pulls from
+// low revs, builds to its peak around 10,500 and still makes power to the limiter (about 42 hp at 12,500)
 const engineTorqueCurve: [number, number][] = [
-  [1000, 10], [3000, 15], [5000, 19], [7000, 22.5], [9000, 25.5], [10500, 26.8], [11500, 26.2], [12500, 24.3], [13500, 21.5], [14500, 19],
+  [1000, 15], [3000, 20], [5000, 23.5], [7000, 25.5], [9000, 26.6], [10500, 26.8], [11500, 26.2], [12500, 24.3], [13500, 21.5], [14500, 19],
 ];
 const idleRpm = 1800;
 const launchRpm = 8500; // where the clutch slips to on full throttle pulling away
@@ -509,6 +512,15 @@ let shiftTimeRemaining = 0;
 let autoShiftCooldown = 0;
 let isClutchBiting = false; // the clutch was just let out with the engine spinning faster than the wheel
 const engineInertia = 0.012; // kg m^2 at the crank: crank, flywheel and clutch
+
+// How far the nose is up off the ground under the rear wheel, in degrees, with the front wheel in the air
+// and the rear on the ground (a wheelie); 0 otherwise
+function wheelieDegrees() {
+  const rearNormal = vehicle.wheelIsInContact(rearWheelIndex) ? vehicle.wheelContactNormal(rearWheelIndex) : null;
+  if (!rearNormal || vehicle.wheelIsInContact(frontWheelIndex)) return 0;
+  const noseUp = bikeForwardAxis.x * rearNormal.x + bikeForwardAxis.y * rearNormal.y + bikeForwardAxis.z * rearNormal.z;
+  return THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(noseUp, -1, 1)));
+}
 
 // Engine turns per rear wheel turn in a gear
 export function overallRatio(gear: number) {
@@ -601,7 +613,9 @@ function updateGearbox(throttle: number, isInAir: boolean) {
   state.isOnRevLimiter = throttle > 0.1 && limiterCut < 1;
   const shiftCut = shiftTimeRemaining > 0 ? 0 : 1;
   const crankTorque = throttle * engineTorque(engineRpm) * limiterCut * shiftCut + flywheelTorque;
-  const driveForce = (crankTorque * ratio * drivetrainEfficiency * settings.enginePowerScale) / wheelRadius;
+  // Front up and the nose well up off the ground under the rear wheel: the rider rolls off before it loops
+  const wheelieCut = 1 - THREE.MathUtils.smoothstep(wheelieDegrees(), settings.wheelieLimitDegrees - 10, settings.wheelieLimitDegrees);
+  const driveForce = (wheelieCut * crankTorque * ratio * drivetrainEfficiency * settings.enginePowerScale) / wheelRadius;
   // Off the throttle the engine holds the bike back harder in a low gear and at high revs. Not once the
   // clutch is slipping (near a stop).
   const engineBrakingForce =
@@ -672,7 +686,12 @@ function updateBrakesAndEngine(engineDrive: number, engineBraking: number, forwa
     const deliveredBrakeForce = isLocked ? settings.lockedTireGrip * grip : grip > 0 ? Math.min(brakeForce, brakingGrip) : brakeForce;
     // Rapier's wheel brake is an impulse cap per step, so convert from newtons
     vehicle.setWheelBrake(wheelIndex, isLocked ? 0 : deliveredBrakeForce * physicsTimestep);
-    if (isRear) vehicle.setWheelEngineForce(rearWheelIndex, isLocked ? 0 : Math.max(0, drive));
+    // The rear can only put down the drive its grip has left over from cornering (less once it's stepped out);
+    // past that it just spins up. Asking Rapier for more would skid the tire and take its sideways grip too,
+    // and the bike would stop turning.
+    const overLeanGrip = 1 - settings.overLeanRearGripLoss * state.rearSlideAmount;
+    const tractionLimit = grip > 0 ? Math.sqrt(Math.max(0, (grip * overLeanGrip) ** 2 - corneringForce * corneringForce)) : Infinity;
+    if (isRear) vehicle.setWheelEngineForce(rearWheelIndex, isLocked ? 0 : THREE.MathUtils.clamp(drive, 0, tractionLimit));
     state.brakeForces[wheelIndex] = deliveredBrakeForce;
   }
 }
@@ -801,7 +820,17 @@ function balanceAndSteer(forwardSpeed: number, groundBank: number) {
   );
   const reachableLean = Math.min(fullStickLean, 0.9 * lockLimitedLean);
   const overLean = Math.abs(bodyLean) - gripLimitedLean;
-  state.rearSlideAmount = balanceWeight * THREE.MathUtils.clamp(overLean / THREE.MathUtils.degToRad(settings.overLeanRangeDegrees), 0, 1);
+  // Stepping out is immediate; hooking back up takes a moment, so the rear comes back in rather than snapping
+  // in (which would kick the bike over the other way)
+  const slideAmount = balanceWeight * THREE.MathUtils.clamp(overLean / THREE.MathUtils.degToRad(settings.overLeanRangeDegrees), 0, 1);
+  state.rearSlideAmount =
+    slideAmount >= state.rearSlideAmount
+      ? slideAmount
+      : slideAmount + (state.rearSlideAmount - slideAmount) * Math.exp(-physicsTimestep / 0.08);
+  // The part of the slide the stick asked for, judged off the gas: what the low-side timer counts. Too much
+  // gas leaned over steps the rear out, scrubs speed and runs wide, but on its own the rider holds that.
+  const coastingOverLean = Math.abs(bodyLean) - leanHeldOnBank(settings.leanGripUse * coastingCorneringGrip, bankIntoTurn);
+  const stickSlideAmount = balanceWeight * THREE.MathUtils.clamp(coastingOverLean / THREE.MathUtils.degToRad(settings.overLeanRangeDegrees), 0, 1);
   const targetBodyLean = controls.steering * reachableLean;
 
   // Critically damped approach to the target lean. To get that lean acceleration the tires have to push
@@ -828,7 +857,11 @@ function balanceAndSteer(forwardSpeed: number, groundBank: number) {
   }
 
   // Asking the tires for more than they have just plows the front sideways, so don't
-  const maxCorneringAcceleration = corneringGrip * gravity;
+  // Picking the bike up (less lean than it has) goes by the grip off the gas: the rider stands it up with
+  // the bars and their body even with the throttle pinned, rather than the gas holding it down until it falls
+  const isStandingUp = (targetBodyLean - bodyLean) * Math.sign(bodyLean) < 0;
+  const standUpGrip = Math.tan(leanHeldOnBank(coastingCorneringGrip, bankIntoTurn));
+  const maxCorneringAcceleration = (isStandingUp ? Math.max(corneringGrip, standUpGrip) : corneringGrip) * gravity;
   neededLateralAcceleration = THREE.MathUtils.clamp(neededLateralAcceleration, -maxCorneringAcceleration, maxCorneringAcceleration);
 
   const balanceSteering = THREE.MathUtils.clamp(
@@ -840,9 +873,16 @@ function balanceAndSteer(forwardSpeed: number, groundBank: number) {
   const groundSteering = THREE.MathUtils.lerp(directSteering, balanceSteering, balanceWeight);
 
   // Move the lean: gravity against what the tires really delivered. If they slide, the lean falls in.
-  // With a foot down the lean is just held near upright.
+  // With a foot down the lean is just held near upright. A sideways jolt bigger than the tires (and bank)
+  // could ever give, like hitting a berm face or a rut's edge at an angle, goes into the chassis and the
+  // rider's legs, not into flinging the lean over.
+  const deliveredLateralAcceleration = THREE.MathUtils.clamp(
+    state.lateralAcceleration,
+    -settings.lateralJoltLimit * maxCorneringAcceleration,
+    settings.lateralJoltLimit * maxCorneringAcceleration,
+  );
   const pendulumLeanAcceleration =
-    (support * Math.sin(bodyLean) - state.lateralAcceleration * Math.cos(bodyLean)) / pendulumHeight + riderLeanAcceleration;
+    (support * Math.sin(bodyLean) - deliveredLateralAcceleration * Math.cos(bodyLean)) / pendulumHeight + riderLeanAcceleration;
   const feetDownLeanAcceleration = -response * response * bodyLean - 2 * response * state.bodyLeanRate;
   let leanAcceleration = THREE.MathUtils.lerp(feetDownLeanAcceleration, pendulumLeanAcceleration, balanceWeight);
 
@@ -850,10 +890,10 @@ function balanceAndSteer(forwardSpeed: number, groundBank: number) {
   // ground stopped holding that much lean: off the end of a berm, gas on, a light front) and the tires can't
   // stand it up, the rider gets a leg out and catches it, with limited strength. Pushing for full lean
   // right at the limit isn't saved, and a big enough overload is more than the rider can catch.
-  // With the rear stepped well out (too much lean or too much gas) the rider holds the slide, but only for
-  // so long: the hold fades and the bike falls in. Easing the stick or the gas brings the rear back in,
-  // which gives the rider their strength back.
-  if (state.rearSlideAmount > 0.5) state.slideTime += physicsTimestep;
+  // With the rear stepped well out by too much lean the rider holds the slide, but only for so long: the
+  // hold fades and the bike falls in. Easing the stick brings the rear back in, which gives the rider their
+  // strength back. (A slide from the gas alone doesn't count down: the rider holds it.)
+  if (stickSlideAmount > 0.5) state.slideTime += physicsTimestep;
   else state.slideTime = Math.max(0, state.slideTime - 2 * physicsTimestep);
   const slideHold = 1 - THREE.MathUtils.smoothstep(state.slideTime, 0.5 * settings.slideHoldSeconds, settings.slideHoldSeconds);
   const fallingInBeyondWanted = (leanAcceleration - desiredLeanAcceleration) * Math.sign(bodyLean);
@@ -1035,6 +1075,14 @@ export function physicsStep() {
   }
 
   controlTorque.set(0, 0, 0);
+
+  // Wheelie past the limit: the rider gets their weight forward and taps the rear brake, bringing the nose
+  // down (as well as rolling off the gas, in updateGearbox) so it doesn't loop out
+  const wheelieExcess = THREE.MathUtils.smoothstep(wheelieDegrees(), settings.wheelieLimitDegrees - 10, settings.wheelieLimitDegrees + 10);
+  if (wheelieExcess > 0) {
+    const noseUpRate = Math.max(0, bikeAngularVelocity.dot(bikeSideAxis));
+    controlTorque.addScaledVector(bikeSideAxis, -wheelieExcess * (settings.wheelieSaveTorque + 0.3 * settings.wheelieSaveTorque * noseUpRate));
+  }
 
   // Wheel spin and its reaction on the bike. On the ground a wheel spins at road speed. In the air nothing
   // holds it there, so the engine revs the rear wheel up and the brake lever slows both wheels to a stop.

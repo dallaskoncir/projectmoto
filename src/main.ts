@@ -186,6 +186,8 @@ engineFolder.add(settings, 'shiftSeconds', 0, 0.3, 0.01).name('shift drive cut (
 engineFolder.add(settings, 'clutchBiteSeconds', 0.05, 1, 0.05).name('clutch bite time (s)');
 engineFolder.add(settings, 'engineBrakingTorque', 0, 15, 0.5).name('engine braking (Nm)');
 engineFolder.add(settings, 'dragArea', 0, 1.5, 0.05).name('air drag area');
+engineFolder.add(settings, 'wheelieLimitDegrees', 15, 90, 1).name('wheelie limit (deg)');
+engineFolder.add(settings, 'wheelieSaveTorque', 0, 800, 10).name('wheelie save (Nm)');
 const brakeFolder = gui.addFolder('Brakes');
 brakeFolder.add(settings, 'frontBrakeForce', 0, 4000, 10).name('front brake force (LT)');
 brakeFolder.add(settings, 'rearBrakeForce', 0, 3000, 10).name('rear brake force');
@@ -212,6 +214,7 @@ corneringFolder.add(settings, 'countersteerLimitG', 0, 1.5, 0.05).name('counters
 corneringFolder.add(settings, 'riderLeanInitiation', 0, 30, 0.5).name('rider hips lean start');
 corneringFolder.add(settings, 'footDabSpeed', 0, 10, 0.1).name('foot dab speed (m/s)');
 corneringFolder.add(settings, 'riderSaveStrength', 0, 20, 0.5).name('slide save strength');
+corneringFolder.add(settings, 'lateralJoltLimit', 1, 5, 0.1).name('ground jolt limit');
 corneringFolder.add(settings, 'leanResponse', 1, 20, 0.5).name('lean response');
 corneringFolder.add(settings, 'leanPendulumHeight', 0.3, 2, 0.05).name('center of mass height (balance)');
 corneringFolder.add(settings, 'steeringLockDegrees', 5, 50, 0.5).name('steering lock');

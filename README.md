@@ -25,7 +25,7 @@ browser's "standard" mapping are used, so wheels and pedals are ignored.
 
 | Input | Action |
 | --- | --- |
-| RT | Throttle. Leaned over, the drive uses up the rear tire's grip: too much gas mid-corner steps the rear out and runs wide, and held on it low-sides. Pick the bike up to get on the gas |
+| RT | Throttle. Leaned over, the drive uses up the rear tire's grip: too much gas mid-corner spins the rear up and steps it out, so it slides and scrubs speed instead of driving. Pick the bike up to get on the gas. Wheelies past about 35° get the rider rolling off and tapping the rear brake, so it won't loop out |
 | LT | Brakes, both wheels together (75% front by default) |
 | RB | Rear brake on its own (builds up while held), when combined brakes are switched off in the Brakes panel |
 | LB | Clutch: hold to free the engine from the rear wheel (coast with no engine braking, or rev it up); let it out with the revs up for a kick of drive (a clutch dump). Pulling away doesn't need it |
