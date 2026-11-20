@@ -14,7 +14,16 @@ export const settings = {
   engineForce: 1500,
   topSpeed: 25, // meters per second; engine force fades to zero here
   engineBrakingForce: 150,
-  brakeForce: 2000, // total, split evenly between the wheels
+  // Brakes. LT is the front brake and RB the rear, which builds up while held. Combined: LT works both,
+  // split by combinedFrontShare, and RB does nothing.
+  frontBrakeForce: 1500, // newtons at full LT; about all the front tire can take braking upright on flat dirt
+  rearBrakeForce: 1000, // newtons at full rear brake
+  rearBrakeButtonStrength: 0.5, // share of the rear brake force RB holds: a drag, not a stomp
+  rearBrakeRampSeconds: 0.25, // how long RB takes to build to its full strength
+  combinedBrakes: false,
+  combinedFrontShare: 0.75, // front/rear balance when combined; the wheel with more brake gets all of LT
+  lockedTireGrip: 0.8, // share of its grip a locked tire drags with; ease the brake under this to unlock it
+  lockedTireSideGrip: 0.5, // share of its sideways grip a locked tire keeps (knobs plowing the dirt)
 
   frontGrip: 1.2, // lower than the rear: the front washes out first in a flat turn, so weight forward plants it
   rearGrip: 1.4,
@@ -81,7 +90,8 @@ export const settings = {
 // Written by the input code. Sticks are -1..1 after the deadzone, triggers 0..1.
 export const controls = {
   throttle: 0,
-  brake: 0,
+  frontBrake: 0, // LT, 0..1
+  rearBrake: 0, // RB, 1 while held (the rear brake builds up from it)
   steering: 0, // left stick X, +1 = lean right
   riderForwardLean: 0, // right stick Y, +1 = rider forward
   riderSideLean: 0, // right stick X, +1 = rider lays the bike over to the right (on the ground and in the air)
@@ -193,6 +203,9 @@ export const state = {
   trackVersion: 0, // goes up when a new track layout is loaded
   wheelSpinRates: [0, 0], // radians per second, positive when rolling forward
   wheelSpinAngles: [0, 0],
+  brakeLevers: [0, 0], // 0..1 per wheel (rear, front) after combining and the RB build-up
+  brakeForces: [0, 0], // newtons each tire is actually braking with
+  wheelLocked: [false, false], // braked past the tire's grip: not turning, sliding
   lastJump: { distance: 0, airTime: 0, scrubPercent: 0, landingLoad: 0, result: '' },
   statusMessage: '',
   statusTimeRemaining: 0,
@@ -208,6 +221,7 @@ const bikeFlatHeading = new THREE.Vector3();
 const travelFlatHeading = new THREE.Vector3();
 const flatSideAxis = new THREE.Vector3();
 const previousVelocity = new THREE.Vector3();
+const slideVelocity = new THREE.Vector3();
 let wasInAir = false;
 let currentAirTime = 0;
 let takeoffScrubPercent = 0;
@@ -222,6 +236,11 @@ let bobbleSeverity = 0;
 let contactsAreStale = false;
 // Suspension force on each wheel, smoothed so bumps don't jerk the rider's sense of grip around
 const smoothedWheelLoads = [0, 0];
+// Each tire's grip coefficient this step (grip setting with the press bonus), before braking takes its share
+const tireGrips = [settings.rearGrip, settings.frontGrip];
+let rearBrakeButtonLevel = 0;
+// How far each wheel has been braked below road speed (radians per second) on its way to locking
+const wheelSpinDeficits = [0, 0];
 
 function showStatus(message: string, seconds: number) {
   state.statusMessage = message;
@@ -264,6 +283,9 @@ export function resetBike(nearX?: number, nearZ?: number) {
   state.verticalSupport = settings.gravity;
   state.groundBankRadians = 0;
   state.wheelSpinRates.fill(0);
+  state.wheelLocked.fill(false);
+  wheelSpinDeficits.fill(0);
+  rearBrakeButtonLevel = 0;
   state.resetCount++;
 }
 
@@ -279,6 +301,19 @@ function yawFromTravelRadians() {
   travelFlatHeading.normalize();
   const crossUp = bikeFlatHeading.z * travelFlatHeading.x - bikeFlatHeading.x * travelFlatHeading.z;
   return Math.atan2(crossUp, bikeFlatHeading.dot(travelFlatHeading));
+}
+
+// How far the rear tire is sliding sideways: the angle between the bike's heading and the way the rear
+// contact patch is moving, positive when it moves toward the bike's left (the same sense as
+// yawFromTravelRadians). Near zero while the tire grips.
+function rearSlipRadians() {
+  const contactPoint = vehicle.wheelIsInContact(rearWheelIndex) ? vehicle.wheelContactPoint(rearWheelIndex) : null;
+  if (!contactPoint) return 0;
+  const pointVelocity = chassisBody.velocityAtPoint(contactPoint);
+  const forward = pointVelocity.x * bikeForwardAxis.x + pointVelocity.z * bikeForwardAxis.z;
+  const towardRight = pointVelocity.x * flatSideAxis.x + pointVelocity.z * flatSideAxis.z;
+  if (Math.abs(forward) < 1) return 0;
+  return Math.atan2(-towardRight, Math.abs(forward));
 }
 
 function chassisTouchesGround() {
@@ -389,6 +424,88 @@ function applyGroundSidePush() {
   }
 }
 
+// Brakes and engine, per wheel. A rolling tire brakes as hard as asked, up to its grip, and whatever grip
+// the brake takes is gone from cornering (friction circle): dragging a little costs almost nothing, a
+// handful mid-corner stands the bike up or pushes the front. Ask for more than the tire's whole grip and
+// the wheel locks and slides. It rolls again once the brake is eased under what the sliding tire pulls.
+function updateBrakesAndEngine(throttle: number, engineTaper: number, forwardSpeed: number) {
+  // RB builds the rear brake up while held and lets it off quickly
+  const rampStep = physicsTimestep / Math.max(settings.rearBrakeRampSeconds, 0.01);
+  const rearButtonTarget = controls.rearBrake * settings.rearBrakeButtonStrength;
+  rearBrakeButtonLevel += THREE.MathUtils.clamp(rearButtonTarget - rearBrakeButtonLevel, -4 * rampStep, rampStep);
+  if (settings.combinedBrakes) {
+    const frontShare = settings.combinedFrontShare;
+    state.brakeLevers[frontWheelIndex] = controls.frontBrake * Math.min(1, 2 * frontShare);
+    state.brakeLevers[rearWheelIndex] = controls.frontBrake * Math.min(1, 2 * (1 - frontShare));
+  } else {
+    state.brakeLevers[frontWheelIndex] = controls.frontBrake;
+    state.brakeLevers[rearWheelIndex] = rearBrakeButtonLevel;
+  }
+
+  const engineDrive = throttle * settings.engineForce * engineTaper;
+  const engineBraking = (1 - throttle) * settings.engineBrakingForce;
+  for (const wheelIndex of [rearWheelIndex, frontWheelIndex]) {
+    const isRear = wheelIndex === rearWheelIndex;
+    const brakeRequest = state.brakeLevers[wheelIndex] * (isRear ? settings.rearBrakeForce : settings.frontBrakeForce);
+    // On the gas the rear brake drags against the engine
+    const drive = isRear ? engineDrive - brakeRequest : 0;
+    const brakeForce = drive > 0 ? 0 : Math.max(brakeRequest - (isRear ? engineDrive : 0), isRear ? engineBraking : 0);
+
+    // Judged on the smoothed load so a single bump doesn't flicker the wheel between locked and rolling.
+    // Braking harder than the tire grips slows the wheel below road speed (how fast depends on the wheel's
+    // inertia) and it locks once it stops, so a quick squeeze past the limit is fine and holding it isn't,
+    // and at low speed it locks sooner. Easing off lets the ground spin it back up.
+    const grip = vehicle.wheelIsInContact(wheelIndex) ? tireGrips[wheelIndex] * smoothedWheelLoads[wheelIndex] : 0;
+    // Cornering already uses part of the grip (last step's sideways force), leaving less for braking
+    const corneringForce = Math.min(Math.abs(vehicle.wheelSideImpulse(wheelIndex) ?? 0) / physicsTimestep, 0.95 * grip);
+    const brakingGrip = Math.sqrt(Math.max(0, grip * grip - corneringForce * corneringForce));
+    if (grip <= 0) {
+      state.wheelLocked[wheelIndex] = false;
+      wheelSpinDeficits[wheelIndex] = 0;
+    } else if (state.wheelLocked[wheelIndex]) {
+      if (brakeForce < settings.lockedTireGrip * grip) {
+        state.wheelLocked[wheelIndex] = false;
+        wheelSpinDeficits[wheelIndex] = 0;
+      }
+    } else {
+      const spinDeficitChange = ((brakeForce - brakingGrip) * wheelRadius * physicsTimestep) / settings.wheelInertia;
+      wheelSpinDeficits[wheelIndex] = Math.max(0, wheelSpinDeficits[wheelIndex] + spinDeficitChange);
+      if (wheelSpinDeficits[wheelIndex] >= Math.abs(forwardSpeed) / wheelRadius) state.wheelLocked[wheelIndex] = true;
+    }
+
+    const isLocked = state.wheelLocked[wheelIndex];
+    const deliveredBrakeForce = isLocked ? settings.lockedTireGrip * grip : grip > 0 ? Math.min(brakeForce, brakingGrip) : brakeForce;
+    // Rapier's wheel brake is an impulse cap per step, so convert from newtons
+    vehicle.setWheelBrake(wheelIndex, isLocked ? 0 : deliveredBrakeForce * physicsTimestep);
+    if (isRear) vehicle.setWheelEngineForce(rearWheelIndex, isLocked ? 0 : Math.max(0, drive));
+    state.brakeForces[wheelIndex] = deliveredBrakeForce;
+  }
+}
+
+// A locked tire drags at the locked grip against the way it's rolling. Sideways it keeps only its plowing
+// grip (set as its Rapier grip), so a locked front pushes wide and a locked rear steps out.
+function applyLockedTireSlide() {
+  for (const wheelIndex of [rearWheelIndex, frontWheelIndex]) {
+    if (!state.wheelLocked[wheelIndex] || !vehicle.wheelIsInContact(wheelIndex)) continue;
+    const contactPoint = vehicle.wheelContactPoint(wheelIndex);
+    const normal = vehicle.wheelContactNormal(wheelIndex);
+    if (!contactPoint || !normal) continue;
+    const pointVelocity = chassisBody.velocityAtPoint(contactPoint);
+    // The bike's forward direction along the ground
+    const alongNormal = bikeForwardAxis.x * normal.x + bikeForwardAxis.y * normal.y + bikeForwardAxis.z * normal.z;
+    slideVelocity.set(bikeForwardAxis.x - normal.x * alongNormal, bikeForwardAxis.y - normal.y * alongNormal, bikeForwardAxis.z - normal.z * alongNormal);
+    slideVelocity.normalize();
+    const slideSpeed = Math.abs(pointVelocity.x * slideVelocity.x + pointVelocity.y * slideVelocity.y + pointVelocity.z * slideVelocity.z);
+    if (slideSpeed < 0.05) continue;
+    slideVelocity.multiplyScalar(Math.sign(pointVelocity.x * slideVelocity.x + pointVelocity.y * slideVelocity.y + pointVelocity.z * slideVelocity.z) * slideSpeed);
+    const load = vehicle.wheelSuspensionForce(wheelIndex) ?? 0;
+    // Never more than it takes to stop the slide (about a third of the bike's mass at the contact patch)
+    const impulse = Math.min(settings.lockedTireGrip * tireGrips[wheelIndex] * load * physicsTimestep, 0.3 * settings.bikeMass * slideSpeed);
+    slideVelocity.multiplyScalar(-impulse / slideSpeed);
+    chassisBody.applyImpulseAtPoint(slideVelocity, contactPoint, true);
+  }
+}
+
 // The rider's balance on the ground: turn the left stick into a handlebar angle, and move the
 // bike-and-rider lean by what the tires actually did. Returns the steering angle on the ground, positive right.
 function balanceAndSteer(forwardSpeed: number, groundBank: number) {
@@ -429,11 +546,15 @@ function balanceAndSteer(forwardSpeed: number, groundBank: number) {
   const totalWeight = settings.bikeMass * gravity;
   const frontLoad = Math.max(smoothedWheelLoads[frontWheelIndex], 50);
   const rearLoad = Math.max(smoothedWheelLoads[rearWheelIndex], 50);
-  const frontPull = (vehicle.wheelBrake(frontWheelIndex) ?? 0) / physicsTimestep / frontLoad;
-  const rearPull = Math.max(vehicle.wheelEngineForce(rearWheelIndex) ?? 0, (vehicle.wheelBrake(rearWheelIndex) ?? 0) / physicsTimestep) / rearLoad;
-  const sidewaysGripLeft = (grip: number, pull: number) => Math.sqrt(Math.max(0, (grip * pressedGrip) ** 2 - pull * pull));
-  const frontCorneringGrip = (sidewaysGripLeft(settings.frontGrip, frontPull) * frontLoad) / (frontCorneringShare * totalWeight);
-  const rearCorneringGrip = (sidewaysGripLeft(settings.rearGrip, rearPull) * rearLoad) / (rearCorneringShare * totalWeight);
+  const frontPull = state.brakeForces[frontWheelIndex] / frontLoad;
+  const rearPull = Math.max(vehicle.wheelEngineForce(rearWheelIndex) ?? 0, state.brakeForces[rearWheelIndex]) / rearLoad;
+  // A locked tire only has its plowing grip sideways
+  const sidewaysGripLeft = (wheelIndex: number, grip: number, pull: number) =>
+    state.wheelLocked[wheelIndex]
+      ? grip * pressedGrip * settings.lockedTireSideGrip
+      : Math.sqrt(Math.max(0, (grip * pressedGrip) ** 2 - pull * pull));
+  const frontCorneringGrip = (sidewaysGripLeft(frontWheelIndex, settings.frontGrip, frontPull) * frontLoad) / (frontCorneringShare * totalWeight);
+  const rearCorneringGrip = (sidewaysGripLeft(rearWheelIndex, settings.rearGrip, rearPull) * rearLoad) / (rearCorneringShare * totalWeight);
   const flatCorneringGrip = Math.min(frontCorneringGrip, rearCorneringGrip);
   // On a bank the ground itself pushes the bike into the turn by tan(bank) of its weight, on top of the
   // tires' grip. Off-camber (negative bank) takes it away.
@@ -543,8 +664,11 @@ export function physicsStep() {
   if (state.crashTimeRemaining > 0) {
     vehicle.setWheelEngineForce(rearWheelIndex, 0);
     vehicle.setWheelSteering(frontWheelIndex, 0);
-    vehicle.setWheelBrake(frontWheelIndex, (settings.brakeForce / 2) * physicsTimestep);
-    vehicle.setWheelBrake(rearWheelIndex, (settings.brakeForce / 2) * physicsTimestep);
+    vehicle.setWheelBrake(frontWheelIndex, settings.frontBrakeForce * physicsTimestep);
+    vehicle.setWheelBrake(rearWheelIndex, settings.rearBrakeForce * physicsTimestep);
+    vehicle.setWheelFrictionSlip(frontWheelIndex, settings.frontGrip);
+    vehicle.setWheelFrictionSlip(rearWheelIndex, settings.rearGrip);
+    state.wheelLocked.fill(false);
     chassisBody.resetTorques(true);
     state.wobbleRadians = 0;
     vehicle.updateVehicle(physicsTimestep);
@@ -591,13 +715,7 @@ export function physicsStep() {
 
   // Engine force fades linearly to zero at top speed
   const engineTaper = THREE.MathUtils.clamp(1 - forwardSpeed / settings.topSpeed, 0, 1);
-  vehicle.setWheelEngineForce(rearWheelIndex, throttle * settings.engineForce * engineTaper);
-
-  // Rapier's wheel brake is an impulse cap per step, so convert from newtons
-  const brakeForcePerWheel = (controls.brake * settings.brakeForce) / 2;
-  const engineBraking = (1 - throttle) * settings.engineBrakingForce;
-  vehicle.setWheelBrake(frontWheelIndex, brakeForcePerWheel * physicsTimestep);
-  vehicle.setWheelBrake(rearWheelIndex, Math.max(brakeForcePerWheel, engineBraking) * physicsTimestep);
+  updateBrakesAndEngine(throttle, engineTaper, forwardSpeed);
 
   // The right stick lays the bike over the way it points, on the ground and in the air. On the ground the
   // rider's body goes the other way, so the bike-and-rider lean (and the turn) stays the same: pressing the
@@ -616,7 +734,18 @@ export function physicsStep() {
     state.handlebarRadians = 0;
     vehicle.setWheelSteering(frontWheelIndex, 0);
   } else {
-    const { groundSteering, balanceWeight, footWeight, bankIntoTurn } = balanceAndSteer(forwardSpeed, smoothGroundBank());
+    const { groundSteering: balanceSteering, balanceWeight, footWeight, bankIntoTurn } = balanceAndSteer(forwardSpeed, smoothGroundBank());
+    // When braking steps the rear out (locked, or light under hard front braking), the rider steers into the
+    // slide: the bars turn toward where the rear is going, so the front stops dragging the nose further around
+    let groundSteering = balanceSteering;
+    const isBraking = state.brakeLevers[frontWheelIndex] > 0.02 || state.brakeLevers[rearWheelIndex] > 0.02;
+    const rearSlide = isBraking || state.wheelLocked[rearWheelIndex] ? rearSlipRadians() : 0;
+    const slideBeyondGrip = Math.sign(rearSlide) * Math.max(0, Math.abs(rearSlide) - THREE.MathUtils.degToRad(2));
+    if (slideBeyondGrip !== 0 && forwardSpeed > settings.feetDownSpeed) {
+      const handlebarLock = THREE.MathUtils.degToRad(settings.steeringLockDegrees);
+      groundSteering = THREE.MathUtils.clamp(balanceSteering - slideBeyondGrip, -handlebarLock, handlebarLock);
+      state.handlebarRadians = Math.atan(Math.tan(groundSteering) * Math.max(Math.cos(state.bikeLeanRadians), 0.34));
+    }
     // Positive Rapier steering turns left
     vehicle.setWheelSteering(frontWheelIndex, -groundSteering);
     // The bike can't lie flatter than where the pegs and bars touch the ground
@@ -635,8 +764,16 @@ export function physicsStep() {
     Math.max(0, state.bikePressAmount * Math.sign(state.bodyLeanRadians)) *
     Math.min(1, Math.abs(state.bodyLeanRadians) / THREE.MathUtils.degToRad(10));
   const pressGrip = isInAir ? 1 : 1 + settings.pressGripBonus * pressIntoTurn;
-  vehicle.setWheelFrictionSlip(frontWheelIndex, settings.frontGrip * pressGrip);
-  vehicle.setWheelFrictionSlip(rearWheelIndex, settings.rearGrip * pressGrip);
+  tireGrips[frontWheelIndex] = settings.frontGrip * pressGrip;
+  tireGrips[rearWheelIndex] = settings.rearGrip * pressGrip;
+  for (const wheelIndex of [rearWheelIndex, frontWheelIndex]) {
+    // A rolling tire keeps its grip in Rapier, whose own friction circle lets braking take only a little of
+    // the cornering grip; the full cost shows up in how far the rider can lean (balanceAndSteer). Charging
+    // it here too lets the rear step out under braking and high-side the bike. A locked tire keeps only its
+    // plowing grip sideways and drags fore and aft on its own (applyLockedTireSlide).
+    const grip = tireGrips[wheelIndex] * (state.wheelLocked[wheelIndex] ? settings.lockedTireSideGrip : 1);
+    vehicle.setWheelFrictionSlip(wheelIndex, grip);
+  }
 
   controlTorque.set(0, 0, 0);
 
@@ -647,7 +784,7 @@ export function physicsStep() {
   for (const wheelIndex of [rearWheelIndex, frontWheelIndex]) {
     const previousSpinRate = state.wheelSpinRates[wheelIndex];
     if (vehicle.wheelIsInContact(wheelIndex)) {
-      state.wheelSpinRates[wheelIndex] = forwardSpeed / wheelRadius;
+      state.wheelSpinRates[wheelIndex] = state.wheelLocked[wheelIndex] ? 0 : Math.max(0, forwardSpeed / wheelRadius - wheelSpinDeficits[wheelIndex]);
     } else {
       // The rear wheel revs up to the top speed rev limit, the same taper the engine uses on the ground
       const wheelSurfaceSpeed = previousSpinRate * wheelRadius;
@@ -657,7 +794,8 @@ export function physicsStep() {
           : 0;
       const spinRateAfterDrive = previousSpinRate + (driveTorque / settings.wheelInertia) * physicsTimestep;
       // Brakes slow the wheel toward a stop but never spin it backwards
-      const brakeSpinRateLoss = ((brakeForcePerWheel * wheelRadius) / settings.wheelInertia) * physicsTimestep;
+      const fullBrakeForce = wheelIndex === rearWheelIndex ? settings.rearBrakeForce : settings.frontBrakeForce;
+      const brakeSpinRateLoss = ((state.brakeLevers[wheelIndex] * fullBrakeForce * wheelRadius) / settings.wheelInertia) * physicsTimestep;
       state.wheelSpinRates[wheelIndex] = Math.sign(spinRateAfterDrive) * Math.max(0, Math.abs(spinRateAfterDrive) - brakeSpinRateLoss);
       // The wheel spins around the bike's -Z axis when rolling forward, so its reaction on the bike is
       // around +Z, and positive torque around +Z lifts the nose
@@ -722,6 +860,7 @@ export function physicsStep() {
 
   vehicle.updateVehicle(physicsTimestep);
   applyGroundSidePush();
+  applyLockedTireSlide();
   world.step();
   contactsAreStale = false;
 }

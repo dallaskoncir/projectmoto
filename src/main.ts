@@ -206,7 +206,14 @@ const engineFolder = gui.addFolder('Engine and brakes');
 engineFolder.add(settings, 'engineForce', 0, 5000, 10).name('engine force');
 engineFolder.add(settings, 'topSpeed', 5, 60, 0.5).name('top speed (m/s)');
 engineFolder.add(settings, 'engineBrakingForce', 0, 1000, 10).name('engine braking');
-engineFolder.add(settings, 'brakeForce', 0, 6000, 10).name('brake force');
+const brakeFolder = gui.addFolder('Brakes');
+brakeFolder.add(settings, 'frontBrakeForce', 0, 4000, 10).name('front brake force (LT)');
+brakeFolder.add(settings, 'rearBrakeForce', 0, 3000, 10).name('rear brake force');
+brakeFolder.add(settings, 'rearBrakeButtonStrength', 0, 1, 0.01).name('RB rear brake strength');
+brakeFolder.add(settings, 'rearBrakeRampSeconds', 0, 1, 0.01).name('RB build-up time (s)');
+brakeFolder.add(settings, 'combinedBrakes').name('combined (LT brakes both)');
+brakeFolder.add(settings, 'combinedFrontShare', 0, 1, 0.01).name('combined front share');
+brakeFolder.add(settings, 'lockedTireGrip', 0.3, 1, 0.01).name('locked tire grip');
 const corneringFolder = gui.addFolder('Grip and cornering');
 corneringFolder.add(settings, 'frontGrip', 0.1, 5, 0.05).name('front grip');
 corneringFolder.add(settings, 'rearGrip', 0.1, 5, 0.05).name('rear grip');
@@ -305,16 +312,18 @@ function readGamepad() {
       ? `Connect a controller and press a button (ignoring: ${ignoredDevices})`
       : 'Connect a controller and press a button';
     controls.throttle = 0;
-    controls.brake = 0;
+    controls.frontBrake = 0;
+    controls.rearBrake = 0;
     controls.steering = 0;
     controls.riderForwardLean = 0;
     controls.riderSideLean = 0;
     resetPressed = false;
     return;
   }
-  // Standard mapping: buttons 6/7 are LT/RT, axis 0 is left stick X, axes 2/3 are right stick X/Y (up is negative)
+  // Standard mapping: buttons 6/7 are LT/RT, 5 is RB, axis 0 is left stick X, axes 2/3 are right stick X/Y (up is negative)
   controls.throttle = gamepad.buttons[7]?.value ?? 0;
-  controls.brake = gamepad.buttons[6]?.value ?? 0;
+  controls.frontBrake = gamepad.buttons[6]?.value ?? 0;
+  controls.rearBrake = gamepad.buttons[5]?.pressed ? 1 : 0;
   controls.steering = applyDeadzone(gamepad.axes[0] ?? 0);
   controls.riderForwardLean = -applyDeadzone(gamepad.axes[3] ?? 0); // +1 = rider forward
   controls.riderSideLean = applyDeadzone(gamepad.axes[2] ?? 0); // +1 = lay the bike over to the right
@@ -440,7 +449,9 @@ function updateHud(frameSeconds: number) {
     `last jump ${lastJump.distance.toFixed(1)} m   air ${lastJump.airTime.toFixed(2)} s   ` +
     `scrub ${lastJump.scrubPercent.toFixed(0)}%   landing ${lastJump.landingLoad.toFixed(1)} g ${lastJump.result}\n` +
     `${controllerDescription}\n` +
-    `throttle ${controls.throttle.toFixed(2)}   brake ${controls.brake.toFixed(2)}   ` +
+    `throttle ${controls.throttle.toFixed(2)}   ` +
+    `front brake ${state.brakeLevers[frontWheelIndex].toFixed(2)}${state.wheelLocked[frontWheelIndex] ? ' LOCKED' : ''}   ` +
+    `rear brake ${state.brakeLevers[rearWheelIndex].toFixed(2)}${state.wheelLocked[rearWheelIndex] ? ' LOCKED' : ''}   ` +
     `steer ${controls.steering.toFixed(2)}   rider forward ${controls.riderForwardLean.toFixed(2)}   ` +
     `bike press ${controls.riderSideLean.toFixed(2)}`;
 }
