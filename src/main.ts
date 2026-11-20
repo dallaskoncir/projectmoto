@@ -21,6 +21,7 @@ import { cellSize, cellsPerSide, centerlineSpacing, mapSize, trackHalfWidth } fr
 import { trackDesigns } from './trackDesigns.ts';
 import { createBikeModel } from './bikeModel.ts';
 import { isSoundRunning, soundSettings, unlockSound, updateBikeSound } from './bikeSound.ts';
+import { keyboardSettings, readKeyboard } from './keyboardInput.ts';
 
 // ---------- Rendering ----------
 
@@ -246,6 +247,8 @@ cameraFolder.add(settings, 'cameraDistance', 2, 15, 0.1).name('camera distance')
 cameraFolder.add(settings, 'cameraHeight', 0, 8, 0.1).name('camera height');
 cameraFolder.add(settings, 'cameraSmoothing', 1, 30, 0.5).name('camera smoothing');
 cameraFolder.add(settings, 'stickDeadzone', 0, 0.4, 0.01).name('stick deadzone');
+cameraFolder.add(keyboardSettings, 'fullLean', 0.3, 1, 0.05).name('keyboard full lean');
+cameraFolder.add(keyboardSettings, 'rampSeconds', 0.05, 0.6, 0.05).name('keyboard ramp (s)');
 const landingFolder = gui.addFolder('Landing penalty');
 landingFolder.add(settings, 'landingLeanBobbleDegrees', 0, 90, 1).name('lean bobble angle');
 landingFolder.add(settings, 'landingLeanCrashDegrees', 0, 90, 1).name('lean crash angle');
@@ -300,42 +303,42 @@ function applyDeadzone(value: number) {
   return (Math.sign(value) * (magnitude - settings.stickDeadzone)) / (1 - settings.stickDeadzone);
 }
 
-function readGamepad() {
+// The controller and the keyboard both drive the bike: for each input, whichever is pushed further wins
+function readInput(frameSeconds: number) {
+  const keyboard = readKeyboard(frameSeconds);
   // Only use a standard-layout pad (Xbox style). Wheels, pedals and other devices report no standard mapping.
   const connectedGamepads = navigator.getGamepads().filter((connectedGamepad) => connectedGamepad !== null);
   const gamepad = connectedGamepads.find((connectedGamepad) => connectedGamepad.mapping === 'standard');
-  overlayElement.style.display = gamepad ? 'none' : 'flex';
-  if (!gamepad) {
+  overlayElement.style.display = gamepad || keyboard.hasBeenUsed ? 'none' : 'flex';
+  if (!gamepad && !keyboard.hasBeenUsed) {
     const ignoredDevices = connectedGamepads.map((connectedGamepad) => connectedGamepad.id).join(', ');
-    overlayElement.textContent = ignoredDevices
-      ? `Connect a controller and press a button (ignoring: ${ignoredDevices})`
-      : 'Connect a controller and press a button';
-    controls.throttle = 0;
-    controls.frontBrake = 0;
-    controls.rearBrake = 0;
-    controls.steering = 0;
-    controls.riderForwardLean = 0;
-    controls.riderSideLean = 0;
-    controls.shiftUp = false;
-    controls.shiftDown = false;
-    controls.clutch = false;
-    resetPressed = false;
-    trackStepPressed = 0;
-    return;
+    overlayElement.textContent =
+      'Connect a controller and press a button, or ride with the keyboard (W to go, A/D to lean)' +
+      (ignoredDevices ? ` (ignoring: ${ignoredDevices})` : '');
   }
   // Standard mapping: buttons 6/7 are LT/RT, 5 is RB, axis 0 is left stick X, axes 2/3 are right stick X/Y (up is negative)
-  controls.throttle = gamepad.buttons[7]?.value ?? 0;
-  controls.frontBrake = gamepad.buttons[6]?.value ?? 0;
-  controls.rearBrake = gamepad.buttons[5]?.pressed ? 1 : 0;
-  controls.steering = applyDeadzone(gamepad.axes[0] ?? 0);
-  controls.riderForwardLean = -applyDeadzone(gamepad.axes[3] ?? 0); // +1 = rider forward
-  controls.riderSideLean = applyDeadzone(gamepad.axes[2] ?? 0); // +1 = rider's body right, bike over to the left
-  controls.shiftUp = gamepad.buttons[0]?.pressed ?? false; // A
-  controls.shiftDown = gamepad.buttons[1]?.pressed ?? false; // B
-  controls.clutch = gamepad.buttons[4]?.pressed ?? false; // LB
-  resetPressed = gamepad.buttons[8]?.pressed ?? false; // View
-  trackStepPressed = (gamepad.buttons[15]?.pressed ? 1 : 0) - (gamepad.buttons[14]?.pressed ? 1 : 0);
-  controllerDescription = gamepad.id;
+  const pad = {
+    throttle: gamepad?.buttons[7]?.value ?? 0,
+    frontBrake: gamepad?.buttons[6]?.value ?? 0,
+    rearBrake: gamepad?.buttons[5]?.pressed ? 1 : 0,
+    steering: applyDeadzone(gamepad?.axes[0] ?? 0),
+    riderForwardLean: -applyDeadzone(gamepad?.axes[3] ?? 0), // +1 = rider forward
+    riderSideLean: applyDeadzone(gamepad?.axes[2] ?? 0), // +1 = rider's body right, bike over to the left
+  };
+  const further = (a: number, b: number) => (Math.abs(b) > Math.abs(a) ? b : a);
+  controls.throttle = further(pad.throttle, keyboard.throttle);
+  controls.frontBrake = further(pad.frontBrake, keyboard.frontBrake);
+  controls.rearBrake = further(pad.rearBrake, keyboard.rearBrake);
+  controls.steering = further(pad.steering, keyboard.steering);
+  controls.riderForwardLean = further(pad.riderForwardLean, keyboard.riderForwardLean);
+  controls.riderSideLean = further(pad.riderSideLean, keyboard.riderSideLean);
+  controls.shiftUp = (gamepad?.buttons[0]?.pressed ?? false) || keyboard.shiftUp; // A
+  controls.shiftDown = (gamepad?.buttons[1]?.pressed ?? false) || keyboard.shiftDown; // B
+  controls.clutch = (gamepad?.buttons[4]?.pressed ?? false) || keyboard.clutch; // LB
+  resetPressed = (gamepad?.buttons[8]?.pressed ?? false) || keyboard.reset; // View
+  const padTrackStep = (gamepad?.buttons[15]?.pressed ? 1 : 0) - (gamepad?.buttons[14]?.pressed ? 1 : 0);
+  trackStepPressed = padTrackStep || keyboard.trackStep;
+  controllerDescription = gamepad ? gamepad.id : 'keyboard';
 }
 
 // ---------- Main loop ----------
@@ -498,7 +501,7 @@ function frame(now: number) {
   const frameSeconds = Math.min((now - lastFrameTime) / 1000, 0.1);
   lastFrameTime = now;
 
-  readGamepad();
+  readInput(frameSeconds);
   if (resetPressed && !resetWasPressed) resetBike();
   resetWasPressed = resetPressed;
   if (trackStepPressed !== 0 && trackStepWasPressed === 0) loadTrack(settings.trackIndex + trackStepPressed);

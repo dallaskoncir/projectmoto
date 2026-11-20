@@ -16,8 +16,9 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints, plug in an Xbox-style controller and press a button. Click the page once to turn the
-sound on (browsers won't start audio from a controller button). Only controllers with the
+Open the URL Vite prints, plug in an Xbox-style controller and press a button, or ride with the keyboard (see
+below). Click the page or press a key once to turn the sound on (browsers won't start audio from a controller
+button). Only controllers with the
 browser's "standard" mapping are used, so wheels and pedals are ignored.
 
 ## Controls
@@ -34,6 +35,24 @@ browser's "standard" mapping are used, so wheels and pedals are ignored.
 | A / B | Shift up / down (manual gearbox, the default; switch to automatic in the Engine folder of the panel) |
 | View | Back to the start |
 | D-pad left/right | Previous/next track |
+
+### Keyboard
+
+The keyboard works too, alongside a controller or instead of one. Throttle, brakes and lean ramp in over a
+fraction of a second, and a held lean key stops at the tires' limit (both adjustable under Camera and input).
+
+| Keys | Action |
+| --- | --- |
+| W / Up | Throttle |
+| S / Down | Brakes |
+| A D / Left Right | Lean |
+| Space | Rear brake |
+| I / K | Rider forward / back (preload: K up the face, I at the lip) |
+| J / L | Rider's body left / right (scrub, whip) |
+| E / Q | Shift up / down |
+| Left Shift | Clutch |
+| R | Back to the start |
+| [ / ] | Previous / next track |
 
 ## Tracks
 
@@ -61,6 +80,7 @@ grip, cornering, rider, landings and camera. **Copy settings** copies the curren
 - `src/track.ts`: builds a track's heightfield from a design, including berms and jump shapes. Each jump is
   sized from the speed its run-up gives.
 - `src/trackDesigns.ts`: the six track layouts, as corner points plus the features on each straight.
+- `src/keyboardInput.ts`: the keyboard layout, merged with the controller in `main.ts`.
 - `src/bikeSound.ts`: rough engine, wind, skid and landing sounds, made live with Web Audio from the engine's
   revs and load (no sound files). Volume and mute are in the Sound folder of the panel.
 - `src/bikeModel.ts`: the visible bike and rider, built from simple shapes. The forks, swingarm and wheels
