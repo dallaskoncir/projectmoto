@@ -1,7 +1,7 @@
 # ProjectMOTO
 
-A gray-box prototype for a motocross game. There's no art, menus or sound, just physics, controller
-controls and tracks to ride.
+A gray-box prototype for a motocross game. There's no art or menus, just physics, controller
+controls, tracks to ride and rough engine sounds.
 
 The bike is geared like a stock 2024-on Yamaha YZ250F: five speeds, 57/17 primary, 13/50 sprockets and a
 14,000 rpm limiter, with automatic or manual shifting.
@@ -16,7 +16,8 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints, plug in an Xbox-style controller and press a button. Only controllers with the
+Open the URL Vite prints, plug in an Xbox-style controller and press a button. Click the page once to turn the
+sound on (browsers won't start audio from a controller button). Only controllers with the
 browser's "standard" mapping are used, so wheels and pedals are ignored.
 
 ## Controls
@@ -60,6 +61,8 @@ grip, cornering, rider, landings and camera. **Copy settings** copies the curren
 - `src/track.ts`: builds a track's heightfield from a design, including berms and jump shapes. Each jump is
   sized from the speed its run-up gives.
 - `src/trackDesigns.ts`: the six track layouts, as corner points plus the features on each straight.
+- `src/bikeSound.ts`: rough engine, wind, skid and landing sounds, made live with Web Audio from the engine's
+  revs and load (no sound files). Volume and mute are in the Sound folder of the panel.
 - `src/bikeModel.ts`: the visible bike and rider, built from simple shapes. The forks, swingarm and wheels
   follow the physics, and the rider's arms and legs stay on the bars and pegs as the body moves.
 - `src/main.ts`: rendering, the tuning panel, controller input, the camera and the readout. Add

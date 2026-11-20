@@ -20,6 +20,7 @@ import {
 import { cellSize, cellsPerSide, centerlineSpacing, mapSize, trackHalfWidth } from './track.ts';
 import { trackDesigns } from './trackDesigns.ts';
 import { createBikeModel } from './bikeModel.ts';
+import { isSoundRunning, soundSettings, unlockSound, updateBikeSound } from './bikeSound.ts';
 
 // ---------- Rendering ----------
 
@@ -257,6 +258,13 @@ landingFolder.add(settings, 'landingImpactCrashSpeed', 0, 30, 0.1).name('impact 
 landingFolder.add(settings, 'bobbleSpeedLoss', 0, 1, 0.01).name('bobble speed loss');
 landingFolder.add(settings, 'bobbleSeconds', 0, 3, 0.05).name('bobble duration');
 landingFolder.add(settings, 'crashRespawnSeconds', 0.5, 10, 0.1).name('crash respawn time');
+const soundFolder = gui.addFolder('Sound');
+soundFolder.add(soundSettings, 'volume', 0, 1, 0.05).name('volume');
+soundFolder.add(soundSettings, 'muted').name('mute');
+// Browsers only start audio after a click or key press on the page (not a controller button)
+window.addEventListener('pointerdown', unlockSound);
+window.addEventListener('keydown', unlockSound);
+
 const trackFolder = gui.addFolder('Track');
 const trackChoices = Object.fromEntries(trackDesigns.map((design, index) => [`${design.name} (${design.style})`, index]));
 const layoutController = trackFolder
@@ -478,7 +486,7 @@ function updateHud(frameSeconds: number) {
     `rear slide ${(state.rearSlideAmount * 100).toFixed(0)}%${state.slideTime > 0.5 * settings.slideHoldSeconds ? ' FALLING IN' : ''}\n` +
     `last jump ${lastJump.distance.toFixed(1)} m   air ${lastJump.airTime.toFixed(2)} s   ` +
     `scrub ${lastJump.scrubPercent.toFixed(0)}%   preload ${lastJump.preloadPercent.toFixed(0)}%   landing ${lastJump.landingLoad.toFixed(1)} g ${lastJump.result}\n` +
-    `${controllerDescription}\n` +
+    `${controllerDescription}${isSoundRunning() || soundSettings.muted ? '' : '   (click the page to turn the sound on)'}\n` +
     `throttle ${controls.throttle.toFixed(2)}   ` +
     `front brake ${state.brakeLevers[frontWheelIndex].toFixed(2)}${state.wheelLocked[frontWheelIndex] ? ' LOCKED' : ''}   ` +
     `rear brake ${state.brakeLevers[rearWheelIndex].toFixed(2)}${state.wheelLocked[rearWheelIndex] ? ' LOCKED' : ''}   ` +
@@ -525,6 +533,7 @@ function frame(now: number) {
   updateBikeVisuals(physicsTimeAccumulator / physicsTimestep, frameSeconds);
   updateCamera(frameSeconds, justReset);
   updateHud(frameSeconds);
+  updateBikeSound(frameSeconds);
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
