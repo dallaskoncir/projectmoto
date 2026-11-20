@@ -17,6 +17,7 @@ export type FeatureSpec = { runUp?: number } & (
   | { kind: 'tabletop'; lipDegrees?: number }
   | { kind: 'double'; lipDegrees?: number; takeoff?: number }
   | { kind: 'step-up'; takeoff?: number; rise?: number; deck?: number }
+  | { kind: 'step-on-off'; takeoff?: number; deckHeight?: number; deck?: number }
   | { kind: 'big double' | 'triple'; takeoff: number; lipDegrees: number; gap: number; landing: number; landingDegrees: number }
   | { kind: 'rollers' | 'whoops'; count: number; height: number; spacing: number }
   | { kind: 'rhythm'; count: number; height: number; lipDegrees?: number; backDegrees?: number }
@@ -25,8 +26,10 @@ export type FeatureSpec = { runUp?: number } & (
 export type TrackDesign = {
   name: string;
   style: 'motocross' | 'supercross';
-  // Closed loop ridden in this order, each corner of the polygon rounded off with its own radius
-  corners: { x: number; z: number; radius: number }[];
+  // Closed loop ridden in this order, each corner of the polygon rounded off with its own radius.
+  // `insideBerm` also cuts a banked lane into the inside of the turn: a shorter, tighter line than the
+  // outside berm. Flag both corners of a 180 so the lane runs all the way round.
+  corners: { x: number; z: number; radius: number; insideBerm?: boolean }[];
   // straights[i] runs from corner i to corner i+1
   straights: FeatureSpec[][];
   landingRoom: number; // flat ground after each feature
@@ -38,7 +41,7 @@ export type TrackDesign = {
 // ---------- Jump profiles ----------
 // A profile is the height of a feature at distance u along the track from where it starts.
 
-export type JumpKind = 'big double' | 'triple' | 'double' | 'tabletop' | 'step-up' | 'rollers' | 'rhythm' | 'whoops';
+export type JumpKind = 'big double' | 'triple' | 'double' | 'tabletop' | 'step-up' | 'step-on-off' | 'rollers' | 'rhythm' | 'whoops';
 
 export type Jump = {
   kind: JumpKind;
@@ -117,6 +120,59 @@ function gapJump(
     edges: [lip, knuckle],
     edgeHeights: [takeoffHeight, landingHeight],
     description: `${kind}: ${gap.toFixed(0)} m gap, ${takeoffHeight.toFixed(1)} m takeoff to ${landingHeight.toFixed(1)} m landing`,
+    designSpeed,
+  };
+}
+
+// Step-on, step-off: jump up onto a tall flat plateau, ride across it, then jump off a kicker at its far end,
+// over a gap, down to a landing lower than the deck. Neither gap can be rolled.
+function stepOnStepOff(
+  takeoffHeight: number,
+  lipAngle: number,
+  gapOn: number,
+  deckHeight: number,
+  deckLength: number,
+  kickHeight: number,
+  kickAngle: number,
+  gapOff: number,
+  landingHeight: number,
+  designSpeed: number,
+  deckSpeed: number,
+): Omit<Jump, 'start'> {
+  const face = takeoffFace(takeoffHeight, lipAngle);
+  const lipOn = face.length;
+  const takeoffBackEnd = lipOn + takeoffHeight / Math.tan(backsideAngle);
+  const knuckleOn = lipOn + gapOn;
+  const plateauWallStart = knuckleOn - deckHeight / Math.tan(backsideAngle);
+  const deckEnd = knuckleOn + deckLength;
+  const kick = takeoffFace(kickHeight, kickAngle);
+  const lipOff = deckEnd + kick.length;
+  const plateauTop = deckHeight + kickHeight;
+  const plateauBackEnd = lipOff + plateauTop / Math.tan(backsideAngle);
+  const knuckleOff = lipOff + gapOff;
+  const landingWallStart = knuckleOff - landingHeight / Math.tan(backsideAngle);
+  const landing = landingSlope(landingHeight, landingAngle);
+  return {
+    kind: 'step-on-off',
+    length: knuckleOff + landing.length,
+    height: (u) => {
+      if (u < lipOn) return face.height(u);
+      const takeoffBack = u < takeoffBackEnd ? takeoffHeight * (1 - (u - lipOn) / (takeoffBackEnd - lipOn)) : 0;
+      let plateau = 0;
+      if (u >= plateauWallStart && u < knuckleOn) plateau = deckHeight * ((u - plateauWallStart) / (knuckleOn - plateauWallStart));
+      else if (u >= knuckleOn && u < deckEnd) plateau = deckHeight;
+      else if (u >= deckEnd && u < lipOff) plateau = deckHeight + kick.height(u - deckEnd);
+      else if (u >= lipOff && u < plateauBackEnd) plateau = plateauTop * (1 - (u - lipOff) / (plateauBackEnd - lipOff));
+      let landingSide = 0;
+      if (u >= landingWallStart && u < knuckleOff) landingSide = landingHeight * ((u - landingWallStart) / (knuckleOff - landingWallStart));
+      else if (u >= knuckleOff) landingSide = landing.height(u - knuckleOff);
+      return Math.max(takeoffBack, plateau, landingSide);
+    },
+    edges: [lipOn, knuckleOn, lipOff, knuckleOff],
+    edgeHeights: [takeoffHeight, deckHeight, plateauTop, landingHeight],
+    description:
+      `step-on-off: ${gapOn.toFixed(0)} m gap up onto a ${deckHeight.toFixed(1)} m deck, ${deckLength.toFixed(0)} m across, ` +
+      `${gapOff.toFixed(0)} m gap off to a ${landingHeight.toFixed(1)} m landing (built for ${deckSpeed.toFixed(1)} m/s off the deck)`,
     designSpeed,
   };
 }
@@ -210,6 +266,7 @@ export type Track = {
   tangentX: Float32Array;
   tangentZ: Float32Array;
   cornerStrength: Float32Array; // 0 on straights, 1 in tight corners
+  insideBermStrength: Float32Array; // 0 to 1 where a corner has an inside berm, eased in and out
   straights: { start: number; end: number }[]; // straights[i] runs from corner i's arc to corner i+1's
   length: number;
   jumps: Jump[];
@@ -223,6 +280,7 @@ export function buildTrack(design: TrackDesign, withJumps = true): Track {
   const sampleCount = centerline.x.length;
   const length = sampleCount * centerlineSpacing;
   const { cornerStrength, turnDirection } = measureCorners(centerline.tangentX, centerline.tangentZ);
+  const insideBermStrength = markInsideBerms(design.corners, centerline.straights, cornerStrength);
 
   const jumps = withJumps ? placeFeatures(design, centerline.straights, length) : [];
   // Start just out of the first corner, on the first straight
@@ -267,7 +325,7 @@ export function buildTrack(design: TrackDesign, withJumps = true): Track {
       const sample = nearestSample[pointIndex];
       if (sample >= 0 && nearestDistanceSquared[pointIndex] <= featureReach * featureReach) {
         const { along, across } = projectOntoCenterline(centerline, sample, x, z);
-        height += shapeHeight(along, across, length, jumps, cornerStrength, turnDirection);
+        height += shapeHeight(along, across, length, jumps, cornerStrength, turnDirection, insideBermStrength);
         onTrack[pointIndex] = 1 - smoothstep(Math.abs(across), trackHalfWidth, trackHalfWidth + 0.8);
       }
       heights[pointIndex] = height;
@@ -312,6 +370,7 @@ export function buildTrack(design: TrackDesign, withJumps = true): Track {
     tangentX: centerline.tangentX,
     tangentZ: centerline.tangentZ,
     cornerStrength,
+    insideBermStrength,
     straights: centerline.straights,
     length,
     jumps,
@@ -440,6 +499,31 @@ function measureCorners(tangentX: Float32Array, tangentZ: Float32Array) {
   return { cornerStrength: eased, turnDirection };
 }
 
+// Where the corners flagged with an inside berm are along the track: each one's arc plus a few meters either
+// side, eased in and out like the berms, and never more than the corner's own strength.
+function markInsideBerms(corners: TrackDesign['corners'], straights: { start: number; end: number }[], cornerStrength: Float32Array) {
+  const sampleCount = cornerStrength.length;
+  const flagged = new Float32Array(sampleCount);
+  corners.forEach((corner, index) => {
+    if (!corner.insideBerm) return;
+    // Corner i's arc runs from the end of straight i-1 to the start of straight i
+    const arcStart = straights[(index - 1 + corners.length) % corners.length].end;
+    let arcEnd = straights[index].start;
+    while (arcEnd < arcStart) arcEnd += sampleCount * centerlineSpacing;
+    for (let distance = arcStart - 6; distance <= arcEnd + 6; distance += centerlineSpacing) {
+      flagged[(((Math.round(distance / centerlineSpacing)) % sampleCount) + sampleCount) % sampleCount] = 1;
+    }
+  });
+  const easeWindow = Math.round(8 / centerlineSpacing);
+  const strength = new Float32Array(sampleCount);
+  for (let sample = 0; sample < sampleCount; sample++) {
+    let sum = 0;
+    for (let offset = -easeWindow; offset <= easeWindow; offset++) sum += flagged[(sample + offset + sampleCount) % sampleCount];
+    strength[sample] = Math.min(smoothstep(sum / (2 * easeWindow + 1), 0, 1), cornerStrength[sample]);
+  }
+  return strength;
+}
+
 // Speed a fast rider carries out of a corner, roughly. A gentle bend can be straightened by using the
 // width of the track, so the line's radius grows as the turn gets smaller; sweepers are taken nearly flat out.
 // Corners the same way with only a short straight between (two 90s making a 180) count as one turn.
@@ -532,6 +616,32 @@ function buildFeature(spec: FeatureSpec, designSpeed: number, runUpSpeed: number
       }
       return gapJump('step-up', takeoffHeight, lipAngle, gap, landingHeight, landingAngle, designSpeed, spec.deck ?? 6.5);
     }
+    case 'step-on-off': {
+      // Step on: like a step-up, sized so the design speed lands on the deck past the knuckle. The deck is
+      // long enough that a big overjump still comes down on it. Step off: the rider lands the step-on
+      // carrying most of their speed forward and gets back on the gas across the deck; the gap off is sized
+      // for that speed, with a landing lower than the deck. Too slow across the top and it cases.
+      const takeoffHeight = spec.takeoff ?? 1.5;
+      const deckHeight = Math.min(spec.deckHeight ?? 3, maxHeight);
+      const lipAngle = 30 * degrees;
+      const gapOn = 0.7 * flightDistance(designSpeed, lipAngle, takeoffHeight, deckHeight);
+      if (gapOn < (takeoffHeight + deckHeight) / Math.tan(backsideAngle) + 1.5) {
+        throw new Error(`${where}: a step-on needs more speed than ${designSpeed.toFixed(1)} m/s`);
+      }
+      const deckLength = spec.deck ?? Math.max(12, flightDistance(designSpeed * 1.15, lipAngle, takeoffHeight, deckHeight) - gapOn + 3);
+      const deckSpeed = speedAfterRunUp(deckLength, 0.8 * designSpeed);
+      const kickHeight = 0.4;
+      const kickAngle = 20 * degrees;
+      let landingHeight = deckHeight - 1;
+      let gapOff = 0;
+      for (let pass = 0; pass < 3; pass++) {
+        gapOff = 0.7 * flightDistance(deckSpeed, kickAngle, deckHeight + kickHeight, landingHeight);
+        landingHeight = Math.min(deckHeight - 0.6, Math.max(deckHeight - 1.2, landingHeightFor(deckSpeed, kickAngle, deckHeight + kickHeight, gapOff, maxHeight)));
+      }
+      const minimumGapOff = (deckHeight + kickHeight + landingHeight) / Math.tan(backsideAngle) + 1;
+      if (gapOff < minimumGapOff) throw new Error(`${where}: a step-off needs more speed than ${deckSpeed.toFixed(1)} m/s`);
+      return stepOnStepOff(takeoffHeight, lipAngle, gapOn, deckHeight, deckLength, kickHeight, kickAngle, gapOff, landingHeight, designSpeed, deckSpeed);
+    }
     case 'big double':
     case 'triple': {
       const lipAngle = spec.lipDegrees * degrees;
@@ -589,6 +699,7 @@ function shapeHeight(
   jumps: Jump[],
   cornerStrength: Float32Array,
   turnDirection: Float32Array,
+  insideBermStrength: Float32Array,
 ) {
   let height = 0;
   const sideTaper = 1 - smoothstep(Math.abs(across), trackHalfWidth + 0.5, trackHalfWidth + 3.5);
@@ -612,6 +723,29 @@ function shapeHeight(
     if (outward > faceStart && outward <= faceEnd) berm = bermHeight * ((outward - faceStart) / (faceEnd - faceStart)) ** 1.6;
     else if (outward > faceEnd) berm = bermHeight * (1 - smoothstep(outward, faceEnd, faceEnd + 4));
     height = Math.max(height, berm * strength);
+  }
+
+  // Inside berm: a lane cut into the inside of the turn. From a rounded rim just inside the middle of the
+  // track the ground drops to a floor near the inside edge, then climbs gently back up off the track. Like the
+  // outside berm it's steepest high up (about 31 degrees a meter below the rim, easing to flat at the floor),
+  // so carrying more speed up the face finds more bank. The middle of the track stays flat for the outside line.
+  const inside = insideBermStrength[sample];
+  if (inside > 0) {
+    const inward = turnDirection[sample] * across;
+    const depth = 1;
+    const rim = 0.4;
+    const floor = trackHalfWidth - 0.6;
+    const floorEnd = trackHalfWidth + 0.2;
+    // Behind the floor the ground climbs back gently, off the track: turning tighter than the lane runs you
+    // onto the infield rather than into a wall
+    const wallTop = trackHalfWidth + 4.5;
+    let cut = 0;
+    if (inward > rim && inward <= floor) {
+      // Slope shaped s(1-s)^2 across the face: zero at the rim, steepest a third of the way down, flat at the floor
+      const s = (inward - rim) / (floor - rim);
+      cut = depth * (6 * s * s - 8 * s * s * s + 3 * s * s * s * s);
+    } else if (inward > floor) cut = depth * (1 - smoothstep(inward, floorEnd, wallTop));
+    height -= cut * inside;
   }
   return height;
 }

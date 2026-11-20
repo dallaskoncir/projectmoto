@@ -36,6 +36,8 @@ export const settings = {
   throttleRearGripUse: 2, // how much of the rear's grip the engine's drive uses up (1 = all of it, the friction circle); more = the rear steps out on the gas sooner
   fullStickOverLeanDegrees: 8, // how much more lean than the tires hold a full left stick asks for; about 85% stick is right at the limit
   bermNoSlideBankDegrees: 10, // a berm banked this much holds a full stick without the rear stepping out
+  bermStickShare: 0.6, // share of the extra lean a berm's bank allows that a full stick asks for; the rest is margin before the rear steps out
+  bermExitSeconds: 0.35, // how long the rider has to stand the bike up when a berm drops away under it before it low-sides
   overLeanRangeDegrees: 8, // lean past what the tires hold over which the rear steps all the way out
   overLeanRearGripLoss: 0.5, // share of its sideways grip the rear gives up when stepped all the way out
   overLeanSlideDrag: 0.6, // drag of the stepped-out rear, as a share of its load: a slide scrubs speed, which tightens the turn
@@ -209,6 +211,7 @@ export const state = {
   lateralAcceleration: 0, // m/s^2 toward the bike's right, smoothed
   verticalSupport: 9.81, // gravity plus the bike's upward acceleration (m/s^2), smoothed: how hard the ground is pushing up
   groundBankRadians: 0, // how the ground under the wheels is banked, positive = holds a right-hand turn
+  bermBankRadians: 0, // bank into the lean the rider has just had under them, fading after the berm drops away
   wobbleRadians: 0, // visual shake during a bobble
   isInAir: false,
   crashTimeRemaining: 0,
@@ -270,7 +273,7 @@ function showStatus(message: string, seconds: number) {
 
 // Puts the bike on the track, pointing the way the track runs: at the start, or (after a crash) at the
 // centerline a few meters back from a given spot
-const gapJumpKinds = new Set(['double', 'triple', 'big double', 'step-up']);
+const gapJumpKinds = new Set(['double', 'triple', 'big double', 'step-up', 'step-on-off']);
 
 export function resetBike(nearX?: number, nearZ?: number) {
   contactsAreStale = true;
@@ -322,6 +325,7 @@ export function resetBike(nearX?: number, nearZ?: number) {
   state.lateralAcceleration = 0;
   state.verticalSupport = settings.gravity;
   state.groundBankRadians = 0;
+  state.bermBankRadians = 0;
   state.wheelSpinRates.fill(0);
   state.wheelLocked.fill(false);
   wheelSpinDeficits.fill(0);
@@ -587,9 +591,12 @@ function balanceAndSteer(forwardSpeed: number, groundBank: number) {
   const lockLimitedLean = Math.atan((speedSquared * Math.tan(groundSteeringLock)) / (wheelbase * gravity));
   // Pressing the bike into the turn (right stick toward the outside) digs the side knobs in for more grip
   const pressIntoStick = Math.max(0, state.bikePressAmount * Math.sign(controls.steering));
-  // A berm banked into the turn holds the bike up, so it can lean further over
-  const turnSide = Math.sign(controls.steering) || Math.sign(bodyLean);
-  const bankIntoTurn = groundBank * turnSide;
+  // A berm banked into the turn holds the bike up, so it can lean further over. What the tires are holding
+  // now goes by the side the bike is leaning; the stick's target by the side it asks for. (Flicking the stick
+  // the other way while still leaned into a berm doesn't turn the berm into off-camber under the tires.)
+  const tiresLeanSide = Math.abs(bodyLean) > THREE.MathUtils.degToRad(3) ? Math.sign(bodyLean) : Math.sign(controls.steering) || Math.sign(bodyLean);
+  const bankIntoTurn = groundBank * tiresLeanSide;
+  const bankIntoStick = groundBank * (Math.sign(controls.steering) || tiresLeanSide);
   // How far the tires can hold the bike over. Holding a lean takes g*tan(lean) of sideways force, which the bike's
   // geometry splits between the tires by where the center of mass sits, so whichever tire runs out first
   // sets the limit. Each tire's grip grows with the load on it, so the rider's weight matters: forward
@@ -619,19 +626,26 @@ function balanceAndSteer(forwardSpeed: number, groundBank: number) {
     (sidewaysGripLeft(rearWheelIndex, settings.rearGrip, state.brakeForces[rearWheelIndex] / coastingRearLoad) * coastingRearLoad) /
     (rearCorneringShare * totalWeight);
   const coastingCorneringGrip = Math.min(frontCoastingGrip, rearCoastingGrip);
-  // On a bank the ground itself pushes the bike into the turn by tan(bank) of its weight, on top of the
-  // tires' grip. Off-camber (negative bank) takes it away.
-  const corneringGrip = Math.max(0, flatCorneringGrip + Math.tan(bankIntoTurn));
-  // The estimate above reads high against what Rapier's tires deliver, so it's scaled down; the berm's push is solid
-  const gripLimitedLean = Math.atan(Math.max(0, settings.leanGripUse * flatCorneringGrip + Math.tan(bankIntoTurn)));
-  const coastingGripLimitedLean = Math.atan(Math.max(0, settings.leanGripUse * coastingCorneringGrip + Math.tan(bankIntoTurn)));
+  // The tires only care about lean against the ground they're on, so on a bank the lean they hold is the
+  // flat limit plus the bank angle. That's more than the bank's own push added on: the turn presses the bike
+  // into the berm, loading the tires, which grip harder (the "compression" of hitting a berm). Off-camber
+  // (negative bank) takes it away. Capped short of lying flat, where the sums run away.
+  const maxBankedLean = THREE.MathUtils.degToRad(80);
+  const leanHeldOnBank = (grip: number, bank: number) => THREE.MathUtils.clamp(Math.atan(grip) + bank, 0, maxBankedLean);
+  const corneringGrip = Math.tan(leanHeldOnBank(flatCorneringGrip, bankIntoTurn));
+  // The estimate above reads high against what Rapier's tires deliver, so it's scaled down for the lean
+  const gripLimitedLean = leanHeldOnBank(settings.leanGripUse * flatCorneringGrip, bankIntoTurn);
+  // A full stick takes only part of the extra lean a berm allows: all of it turns far tighter than the berm
+  // and drops the bike off its face to the inside. What's left over is margin before the rear steps out.
+  const stickBank = bankIntoStick > 0 ? bankIntoStick * settings.bermStickShare : bankIntoStick;
+  const coastingGripLimitedLean = leanHeldOnBank(settings.leanGripUse * coastingCorneringGrip, stickBank);
   // Full stick asks for a set amount more lean than the tires hold (pressed in, weight forward and on the
   // gas all move that limit): past it the rear steps out. Easing off a little keeps it at the limit. A good
   // berm holds the bike, so the margin fades out as the bank steepens and full stick there is just the limit.
   // Never within a few degrees of the low-side, and at low speed no more than the bars can hold.
-  const bermHold = THREE.MathUtils.clamp(bankIntoTurn / THREE.MathUtils.degToRad(settings.bermNoSlideBankDegrees), 0, 1);
+  const bermHold = THREE.MathUtils.clamp(bankIntoStick / THREE.MathUtils.degToRad(settings.bermNoSlideBankDegrees), 0, 1);
   const fullStickLean = Math.min(
-    THREE.MathUtils.degToRad(settings.lowSideLeanDegrees - 6) + Math.max(0, bankIntoTurn),
+    THREE.MathUtils.degToRad(settings.lowSideLeanDegrees - 6) + Math.max(0, bankIntoStick),
     coastingGripLimitedLean + (1 - bermHold) * THREE.MathUtils.degToRad(settings.fullStickOverLeanDegrees),
   );
   const reachableLean = Math.min(fullStickLean, 0.9 * lockLimitedLean);
@@ -710,7 +724,12 @@ function balanceAndSteer(forwardSpeed: number, groundBank: number) {
   state.bodyLeanRadians += state.bodyLeanRate * physicsTimestep;
 
   state.handlebarRadians = Math.atan(Math.tan(groundSteering) * bikeLeanCosine);
-  return { groundSteering, balanceWeight, footWeight, bankIntoTurn };
+  // Coming off a berm (the end of it, or turning tighter than it and dropping down its face) the bank goes
+  // from under a bike still leaned for it. The rider has a moment to stand it up: the low-side limit
+  // remembers the bank for bermExitSeconds while the tires, now short of grip, step the rear out.
+  const bermFade = 1 - Math.exp(-physicsTimestep / Math.max(settings.bermExitSeconds, 0.01));
+  state.bermBankRadians = Math.max(bankIntoTurn, state.bermBankRadians + (bankIntoTurn - state.bermBankRadians) * bermFade);
+  return { groundSteering, balanceWeight, footWeight, bankIntoTurn: state.bermBankRadians };
 }
 
 export function physicsStep() {
@@ -835,7 +854,9 @@ export function physicsStep() {
     // Positive Rapier steering turns left
     vehicle.setWheelSteering(frontWheelIndex, -groundSteering);
     // The bike can't lie flatter than where the pegs and bars touch the ground
-    state.bikeLeanRadians = THREE.MathUtils.clamp(state.bodyLeanRadians + bikePressLean, -maxBikeLean, maxBikeLean);
+    // (further over on a berm, whose face is tilted up to meet them)
+    const pegsDownLean = maxBikeLean + Math.max(0, bankIntoTurn);
+    state.bikeLeanRadians = THREE.MathUtils.clamp(state.bodyLeanRadians + bikePressLean, -pegsDownLean, pegsDownLean);
     const isLowSide =
       Math.abs(state.bodyLeanRadians) > THREE.MathUtils.degToRad(settings.lowSideLeanDegrees) + Math.max(0, bankIntoTurn);
     if (balanceWeight > 0.5 && footWeight < 0.5 && isLowSide) {

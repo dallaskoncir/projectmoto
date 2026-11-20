@@ -93,7 +93,7 @@ function buildTerrainMesh() {
       positions.set([x, height, z], pointIndex * 3);
       uvs.set([x / 2, z / 2], pointIndex * 2);
       color.copy(offTrackColor).lerp(trackColor, track.onTrack[pointIndex]);
-      color.lerp(raisedDirtColor, Math.min(1, height / 1.2) * Math.max(track.onTrack[pointIndex], 0.6));
+      color.lerp(raisedDirtColor, Math.min(1, Math.abs(height) / 1.2) * Math.max(track.onTrack[pointIndex], 0.6));
       colors.set([color.r, color.g, color.b], pointIndex * 3);
     }
   }
@@ -189,6 +189,8 @@ corneringFolder.add(settings, 'frontGrip', 0.1, 5, 0.05).name('front grip');
 corneringFolder.add(settings, 'rearGrip', 0.1, 5, 0.05).name('rear grip');
 corneringFolder.add(settings, 'fullStickOverLeanDegrees', 0, 20, 0.5).name('full stick lean past grip');
 corneringFolder.add(settings, 'bermNoSlideBankDegrees', 1, 30, 1).name('berm bank that holds full stick');
+corneringFolder.add(settings, 'bermStickShare', 0, 1, 0.05).name('berm extra lean on full stick');
+corneringFolder.add(settings, 'bermExitSeconds', 0, 1, 0.05).name('time to stand up off a berm');
 corneringFolder.add(settings, 'leanGripUse', 0.5, 1, 0.01).name('grip estimate scale (slide starts)');
 corneringFolder.add(settings, 'overLeanRangeDegrees', 1, 20, 0.5).name('lean past grip for full slide');
 corneringFolder.add(settings, 'overLeanRearGripLoss', 0, 1, 0.05).name('rear grip lost in a slide');

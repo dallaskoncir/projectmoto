@@ -23,7 +23,7 @@ browser's "standard" mapping are used, so wheels and pedals are ignored.
 | RT | Throttle. Leaned over, the drive uses up the rear tire's grip: too much gas mid-corner steps the rear out and runs wide, and held on it low-sides. Pick the bike up to get on the gas |
 | LT | Brakes, both wheels together (75% front by default) |
 | RB | Rear brake on its own (builds up while held), when combined brakes are switched off in the Brakes panel |
-| Left stick | Lean the bike and rider into a turn. The rider countersteers to get there. About 85% stick is the tires' limit; past it the rear steps out and the bike slides around tighter, scrubbing speed. Hold it there too long and it low-sides. A well-banked berm holds full stick. In the air it lays the bike over: hold it through the lip to start a whip |
+| Left stick | Lean the bike and rider into a turn. The rider countersteers to get there. About 85% stick is the tires' limit; past it the rear steps out and the bike slides around tighter, scrubbing speed. Hold it there too long and it low-sides. A berm lets the bike lean further and corner harder than flat ground, so ride up into it to carry more speed; it holds full stick, but turning much tighter than the berm drops you off its face to the inside, where the rear steps out until you stand the bike up. In the air it lays the bike over: hold it through the lip to start a whip |
 | Right stick left/right | Move the rider's body that way, and the bike goes over the other way: stand it up or press it down in a turn, scrub off a lip, whip in the air (with the left stick, the full whip with more swing) |
 | Right stick up/down | Rider forward/back: weight shift on the ground, pitch in the air. Preload: hold it back up the face of a jump and flick it forward at the lip to pop higher and further |
 | A | Back to the start |
@@ -36,7 +36,12 @@ Six fixed tracks, picked from the Track folder in the panel or with the D-pad:
 - **Motocross:** Ridgeback, Long Meadow and Quarry. Long straights, sweeping bermed corners, big doubles,
   tabletops, step-ups and rollers.
 - **Supercross:** Harbor, Dome and Night. Compact stadium layouts with tight 180s, rhythm sections, whoops and
-  triples.
+  triples. Night's long back straight has a step-on, step-off: jump up onto a 3 m plateau, get on the gas
+  across the top, and jump off the kicker at the far end over a gap to the landing.
+
+Some corners on every track also have an inside berm: a banked lane cut into the inside of the turn, for a
+shorter, tighter line than the outside berm. It's quicker through some corners and slower through others, so
+pick your line.
 
 ## Tuning
 
