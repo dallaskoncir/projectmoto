@@ -398,5 +398,5 @@ export function createBikeModel() {
   root.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) (child as THREE.Mesh).castShadow = true;
   });
-  return { root, update };
+  return { root, update, head };
 }

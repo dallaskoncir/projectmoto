@@ -258,6 +258,12 @@ const cameraFolder = gui.addFolder('Camera and input');
 cameraFolder.add(settings, 'cameraDistance', 2, 15, 0.1).name('camera distance');
 cameraFolder.add(settings, 'cameraHeight', 0, 8, 0.1).name('camera height');
 cameraFolder.add(settings, 'cameraSmoothing', 1, 30, 0.5).name('camera smoothing');
+const firstPersonController = cameraFolder.add(settings, 'firstPerson').name('first person (Y / C)');
+cameraFolder.add(settings, 'chaseFov', 30, 120, 1).name('chase FOV (deg)');
+cameraFolder.add(settings, 'firstPersonFov', 30, 120, 1).name('first person FOV (deg)');
+cameraFolder.add(settings, 'firstPersonRoll', 0, 1, 0.05).name('first person roll with lean');
+cameraFolder.add(settings, 'firstPersonLookDownDegrees', -10, 40, 1).name('first person look down (deg)');
+cameraFolder.add(settings, 'firstPersonSoftening', 0, 0.3, 0.01).name('first person impact softening (s)');
 cameraFolder.add(settings, 'stickDeadzone', 0, 0.4, 0.01).name('stick deadzone');
 cameraFolder.add(keyboardSettings, 'fullLean', 0.3, 1, 0.05).name('keyboard full lean');
 cameraFolder.add(keyboardSettings, 'rampSeconds', 0.05, 0.6, 0.05).name('keyboard ramp (s)');
@@ -307,6 +313,8 @@ let resetPressed = false;
 let resetWasPressed = false;
 let trackStepPressed = 0; // -1 D-pad left, +1 D-pad right
 let trackStepWasPressed = 0;
+let cameraTogglePressed = false;
+let cameraToggleWasPressed = false;
 let controllerDescription = 'no controller';
 
 function applyDeadzone(value: number) {
@@ -350,6 +358,7 @@ function readInput(frameSeconds: number) {
   resetPressed = (gamepad?.buttons[8]?.pressed ?? false) || keyboard.reset; // View
   const padTrackStep = (gamepad?.buttons[15]?.pressed ? 1 : 0) - (gamepad?.buttons[14]?.pressed ? 1 : 0);
   trackStepPressed = padTrackStep || keyboard.trackStep;
+  cameraTogglePressed = (gamepad?.buttons[3]?.pressed ?? false) || keyboard.cameraToggle; // Y
   controllerDescription = gamepad ? gamepad.id : 'keyboard';
 }
 
@@ -382,8 +391,63 @@ const inspectOffsets: Record<string, [number, number, number]> = {
 };
 const inspectOffset = new THREE.Vector3();
 
+const headPosition = new THREE.Vector3();
+const headQuaternion = new THREE.Quaternion();
+const headForward = new THREE.Vector3();
+const headUp = new THREE.Vector3();
+const eyeOffset = new THREE.Vector3(0.1, 0.01, 0); // behind the goggles, in the helmet's own axes
+const eyeOffsetWorld = new THREE.Vector3();
+let wasFirstPerson = false;
+let eyePitch = 0;
+let eyeHeading = 0;
+const eyeForward = new THREE.Vector3();
+
+// Helmet cam: at the rider's eyes, looking where the head looks (the head stays pointed ahead as the body
+// pitches). The view only rolls part of the way with the bike's lean, like a rider's head. Pitch jolts (the
+// front slapping down after a landing, a kicker) are the biggest lurch in the view, so pitch is softened
+// while heading follows the bike exactly.
+function updateFirstPersonCamera(frameSeconds: number, snapCamera: boolean) {
+  bikeGroup.updateMatrixWorld(true);
+  bikeModel.head.getWorldQuaternion(headQuaternion);
+  bikeModel.head.getWorldPosition(headPosition);
+  camera.position.copy(headPosition).add(eyeOffsetWorld.copy(eyeOffset).applyQuaternion(headQuaternion));
+  const lookDown = THREE.MathUtils.degToRad(settings.firstPersonLookDownDegrees);
+  headForward.set(Math.cos(lookDown), -Math.sin(lookDown), 0).applyQuaternion(headQuaternion);
+  headUp.set(Math.sin(lookDown), Math.cos(lookDown), 0).applyQuaternion(headQuaternion);
+  camera.up.copy(worldUp).lerp(headUp, settings.firstPersonRoll);
+  if (camera.up.lengthSq() < 0.01) camera.up.copy(headUp); // upside down mid-crash
+  camera.up.normalize();
+
+  const targetPitch = Math.asin(THREE.MathUtils.clamp(headForward.y, -1, 1));
+  if (headForward.x * headForward.x + headForward.z * headForward.z > 0.0025) eyeHeading = Math.atan2(headForward.z, headForward.x);
+  const softening = settings.firstPersonSoftening;
+  if (snapCamera || softening < 0.005) eyePitch = targetPitch;
+  else eyePitch += (targetPitch - eyePitch) * (1 - Math.exp(-frameSeconds / softening));
+  eyeForward.set(Math.cos(eyePitch) * Math.cos(eyeHeading), Math.sin(eyePitch), Math.cos(eyePitch) * Math.sin(eyeHeading));
+  camera.lookAt(headPosition.copy(camera.position).add(eyeForward));
+}
+
 function updateCamera(frameSeconds: number, snapCamera: boolean) {
   const offset = inspectView ? inspectOffsets[inspectView] : undefined;
+  const firstPerson = settings.firstPerson && !offset;
+  const fov = firstPerson ? settings.firstPersonFov : settings.chaseFov;
+  const near = firstPerson ? 0.03 : 0.1;
+  if (camera.fov !== fov || camera.near !== near) {
+    camera.fov = fov;
+    camera.near = near;
+    camera.updateProjectionMatrix();
+  }
+  // The helmet would fill the view from inside it
+  bikeModel.head.visible = !firstPerson;
+  // Coming back from the helmet cam, start the chase camera behind the bike instead of where it was left
+  const switched = wasFirstPerson !== firstPerson;
+  wasFirstPerson = firstPerson;
+  if (switched) snapCamera = true;
+  if (firstPerson) {
+    updateFirstPersonCamera(frameSeconds, snapCamera);
+    return;
+  }
+  camera.up.copy(worldUp);
   if (offset) {
     inspectOffset.set(...offset).applyQuaternion(bikeGroup.quaternion);
     camera.position.copy(bikeGroup.position).add(inspectOffset);
@@ -518,6 +582,11 @@ function frame(now: number) {
   resetWasPressed = resetPressed;
   if (trackStepPressed !== 0 && trackStepWasPressed === 0) loadTrack(settings.trackIndex + trackStepPressed);
   trackStepWasPressed = trackStepPressed;
+  if (cameraTogglePressed && !cameraToggleWasPressed) {
+    settings.firstPerson = !settings.firstPerson;
+    firstPersonController.updateDisplay();
+  }
+  cameraToggleWasPressed = cameraTogglePressed;
 
   physicsTimeAccumulator += frameSeconds;
   while (physicsTimeAccumulator >= physicsTimestep) {

@@ -108,6 +108,12 @@ export const settings = {
   cameraDistance: 6,
   cameraHeight: 2.2,
   cameraSmoothing: 6,
+  firstPerson: false, // helmet cam instead of the chase camera (Y button or C key)
+  chaseFov: 65, // vertical field of view, degrees
+  firstPersonFov: 95,
+  firstPersonLookDownDegrees: 12, // tips the helmet cam down so the bars and front fender are in view
+  firstPersonSoftening: 0.1, // seconds: smooths the helmet cam's pitch jolts on landings and bumps (0 = rigid)
+  firstPersonRoll: 0.5, // how much the helmet cam rolls with the bike's lean (0 = horizon stays level)
   stickDeadzone: 0.12,
 
   // Landing judged at touchdown: below the bobble angle is clean, between bobble and crash is a bobble

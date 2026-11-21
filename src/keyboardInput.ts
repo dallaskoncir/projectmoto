@@ -6,7 +6,7 @@
 //   A D / Left Right  lean             R            back to the start
 //   Space         rear brake           [ / ]        previous / next track
 //   I / K         rider forward / back
-//   J / L         rider's body left / right
+//   J / L         rider's body left / right    C            chase / first person camera
 
 export const keyboardSettings = {
   fullLean: 0.85, // how far a held lean key pushes the "stick": 0.85 is right at the tires' limit
@@ -24,6 +24,7 @@ export const keyboardBindings = [
   ['Left Shift', 'clutch'],
   ['R', 'back to the start'],
   ['[ / ]', 'previous / next track'],
+  ['C', 'chase / first person camera'],
 ];
 
 const held = new Set<string>();
@@ -31,7 +32,7 @@ let hasBeenUsed = false;
 
 const handledKeys = new Set([
   'KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space',
-  'KeyI', 'KeyJ', 'KeyK', 'KeyL', 'KeyE', 'KeyQ', 'ShiftLeft', 'KeyR', 'BracketLeft', 'BracketRight',
+  'KeyI', 'KeyJ', 'KeyK', 'KeyL', 'KeyE', 'KeyQ', 'ShiftLeft', 'KeyR', 'BracketLeft', 'BracketRight', 'KeyC',
 ]);
 
 function isTypingInField(event: KeyboardEvent) {
@@ -76,6 +77,7 @@ export function readKeyboard(frameSeconds: number) {
     shiftDown: isDown('KeyQ'),
     clutch: isDown('ShiftLeft'),
     reset: isDown('KeyR'),
+    cameraToggle: isDown('KeyC'),
     trackStep: (isDown('BracketRight') ? 1 : 0) - (isDown('BracketLeft') ? 1 : 0),
   };
 }

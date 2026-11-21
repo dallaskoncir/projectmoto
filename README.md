@@ -33,6 +33,7 @@ browser's "standard" mapping are used, so wheels and pedals are ignored.
 | Right stick left/right | Move the rider's body that way, and the bike goes over the other way: stand it up or press it down in a turn, scrub off a lip, lay it over at the lip to throw a whip, push or pull the bike over in the air (with the left stick, harder). A scrub or whip doesn't come back on its own: push the other way in the air to stand the bike back up |
 | Right stick up/down | Rider forward/back: weight shift on the ground, pitch in the air. Preload: hold it back up the face of a jump and flick it forward at the lip to pop higher and further |
 | A / B | Shift up / down (manual gearbox, the default; switch to automatic in the Engine folder of the panel) |
+| Y | Chase camera / first person (helmet cam) |
 | View | Back to the start |
 | D-pad left/right | Previous/next track |
 
@@ -53,6 +54,7 @@ fraction of a second, and a held lean key stops at the tires' limit (both adjust
 | Left Shift | Clutch |
 | R | Back to the start |
 | [ / ] | Previous / next track |
+| C | Chase camera / first person |
 
 ## Tracks
 
@@ -80,7 +82,9 @@ pick your line.
 ## Tuning
 
 Every value that affects the feel is in the panel on the right and changes live: suspension, engine, brakes,
-grip, cornering, rider, landings and camera. **Copy settings** copies the current values as JSON.
+grip, cornering, rider, landings and camera. The Camera and input folder has the first-person switch, a field
+of view slider for each camera, how much the helmet cam rolls with the bike's lean, how far it looks down, and how much it softens the pitch
+jolts from landings and bumps. **Copy settings** copies the current values as JSON.
 
 ## Code
 
