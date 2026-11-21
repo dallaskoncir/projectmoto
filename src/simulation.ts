@@ -132,6 +132,11 @@ export const settings = {
   // Rollers and whoops: hops off them aren't judged as jump landings (a crash still counts), and on the gas
   // the bike skims the faces: this share of the backward shove from landing on a face is cancelled
   bumpSkim: 0.7,
+  // and the rider keeps the bike straight and level through them: how hard they hold it in line with the
+  // way it's going while only one wheel is down (1 = as hard as in the air), and how hard they level it in
+  // the hops (newton meters per radian of pitch)
+  bumpYawSteadying: 2,
+  bumpPitchSteadying: 600,
 };
 
 // Written by the input code. Sticks are -1..1 after the deadzone, triggers 0..1.
@@ -209,12 +214,23 @@ function markBumpSections() {
   }
 }
 
-function isOnBumpSection() {
+// The centerline sample the bike is over while it's on a rollers or whoops section, otherwise -1
+function bumpSectionSample() {
   const position = chassisBody.translation();
   const sample = track.nearestCenterlineIndex(position.x, position.z);
-  if (!bumpSectionSamples[sample]) return false;
+  if (!bumpSectionSamples[sample]) return -1;
   const offCenter = Math.hypot(position.x - track.centerlineX[sample], position.z - track.centerlineZ[sample]);
-  return offCenter < trackHalfWidth + 1;
+  return offCenter < trackHalfWidth + 1 ? sample : -1;
+}
+
+// Sine of the pitch the hillside under a bump section has along the bike (nose up positive), ignoring the bumps
+function bumpGroundPitchSine(sample: number) {
+  const sampleCount = track.elevation.length;
+  const ahead = track.elevation[(sample + 2) % sampleCount];
+  const behind = track.elevation[(sample - 2 + sampleCount) % sampleCount];
+  const riddenForward = bikeForwardAxis.x * track.tangentX[sample] + bikeForwardAxis.z * track.tangentZ[sample] >= 0 ? 1 : -1;
+  const slope = (riddenForward * (ahead - behind)) / (4 * centerlineSpacing);
+  return slope / Math.sqrt(1 + slope * slope);
 }
 
 // Chassis: bike local axes are +X forward, +Y up, +Z to the rider's right
@@ -1038,6 +1054,8 @@ export function physicsStep() {
   const forwardSpeed = vehicle.currentVehicleSpeed();
   const isInAir = !vehicle.wheelIsInContact(frontWheelIndex) && !vehicle.wheelIsInContact(rearWheelIndex);
   state.isInAir = isInAir;
+  const bumpSample = bumpSectionSample();
+  const onBumpSection = bumpSample >= 0;
 
   // Landing: record jump stats and judge it. Short hops off bumps are ignored.
   if (!isInAir && wasInAir && currentAirTime > 0.3) {
@@ -1089,7 +1107,19 @@ export function physicsStep() {
   // it back toward upright catches the swing and brings it up. Let go and the bike keeps its lay-over and
   // most of its swing, right over and upside down.
   const whipAmount = controls.steering * settings.leftStickWhipShare + bikeLayOver; // +1 = pushing the bike over to the right
-  if (isInAir) {
+  if (isInAir && !wasInAir) tookOffFromBumps = onBumpSection;
+  // Skimming rollers and whoops the wheels skip off every face. Those hops aren't jumps: the bike keeps the
+  // lean it had, with no whip thrown off the face or swung in the air, so it runs straight through them
+  // instead of every bump kicking a small lean further over.
+  const isSkimHop = isInAir && tookOffFromBumps;
+  if (isSkimHop) {
+    state.bodyLeanRate *= Math.exp(-physicsTimestep / 0.1);
+    state.bodyLeanRadians += state.bodyLeanRate * physicsTimestep;
+    state.bikeLeanRadians = state.bodyLeanRadians + bikePressLean;
+    whipLeanRate = 0;
+    vehicle.setWheelSteering(frontWheelIndex, 0);
+    state.rearSlideAmount = 0;
+  } else if (isInAir) {
     if (!wasInAir) {
       const kick = THREE.MathUtils.clamp(velocity.y / 6, 0, 1.5);
       whipLeanRate = settings.whipCarryShare * groundLeanRate + Math.sin(state.bikeLeanRadians) * kick * THREE.MathUtils.degToRad(settings.whipLipKickDegrees);
@@ -1241,7 +1271,6 @@ export function physicsStep() {
     takeoffPreloadPercent = 0;
     const position = chassisBody.translation();
     takeoffPosition.set(position.x, 0, position.z);
-    tookOffFromBumps = isOnBumpSection();
     currentAirTime = 0;
     timeSinceTakeoff = 0;
   }
@@ -1265,13 +1294,25 @@ export function physicsStep() {
   if (isInAir) {
     const pitchRate = bikeAngularVelocity.dot(bikeSideAxis);
     controlTorque.addScaledVector(bikeSideAxis, -settings.airPitchDamping * pitchRate);
+    // Skimming, the rider keeps the bike level with the ground under the bumps, so it comes down on both
+    // wheels instead of nosing over onto the front one face after face (not once a hop carries it past them)
+    if (isSkimHop && onBumpSection) {
+      const pitchError = Math.asin(THREE.MathUtils.clamp(bikeForwardAxis.y, -1, 1)) - Math.asin(bumpGroundPitchSine(bumpSample));
+      controlTorque.addScaledVector(bikeSideAxis, -settings.bumpPitchSteadying * pitchError);
+    }
 
     // Whip yaw: the bike swings sideways the way it's laid over, and a spring pulls it back in line with the
     // direction of travel, so it comes back in line as the rider straightens it up.
     // Laid over right yaws the nose right, which is negative around world up.
-    const layOverShare = Math.sin(state.bikeLeanRadians);
+    const layOverShare = isSkimHop ? 0 : Math.sin(state.bikeLeanRadians);
     const yawTorque = -layOverShare * settings.whipYawTorque + settings.whipYawReturn * yawFromTravelRadians() - settings.airYawDamping * yawRate;
     controlTorque.addScaledVector(worldUp, yawTorque);
+  } else if (onBumpSection && vehicle.wheelIsInContact(frontWheelIndex) !== vehicle.wheelIsInContact(rearWheelIndex)) {
+    // Skimming, the wheels touch down one at a time. A lone tire stops its end of the bike sliding sideways,
+    // so any drift swings the bike round that wheel (worst on the rear alone, which pushes the nose further
+    // off). The rider keeps it pointed down the lane, as they do in the air.
+    const yawTorque = settings.whipYawReturn * yawFromTravelRadians() - settings.airYawDamping * yawRate;
+    controlTorque.addScaledVector(worldUp, settings.bumpYawSteadying * yawTorque);
   }
 
   // Rapier keeps added torques until reset, so replace them every step
@@ -1280,7 +1321,7 @@ export function physicsStep() {
 
   vehicle.updateVehicle(physicsTimestep);
   applyGroundSidePush();
-  if (!isInAir && settings.bumpSkim > 0 && isOnBumpSection()) applyBumpSkim(throttle);
+  if (!isInAir && settings.bumpSkim > 0 && onBumpSection) applyBumpSkim(throttle);
   applyLockedTireSlide();
   if (!isInAir) applyRearSlideDrag();
   world.step();

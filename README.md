@@ -75,11 +75,19 @@ brings one back.
     only just makes the knuckle). Brake hard after the landing for the corner.
 - **Supercross:** Harbor, Dome and Night. Compact stadium layouts with tight 180s, rhythm sections, whoops and
   triples. Night's long back straight has a step-on, step-off: jump up onto a 3 m plateau, get on the gas
-  across the top, and jump off the kicker at the far end over a gap to the landing.
+  across the top, and jump off the kicker at the far end over a gap to a long landing. Full gas across the
+  deck clears it; roll off up there and you case it. The tabletop after it comes up fast, right before the
+  hairpin: carry all that speed and you'll clear the deck, so check up or get on the brakes hard after.
+
+Motocross doubles are sized for full gas out of the corner: pinned, you land early down the landing; roll off
+or come out of the corner slow and you case it. Tabletop and triple landings curve, steep at the top and
+flattening out, so an overjump still comes down on the slope.
 
 Rollers and whoops aren't judged like jumps: hopping off them never bobbles you (a big crossed-up landing can
 still crash). Stay on the gas through them and the bike skims across the faces and carries its speed; roll off
-and the faces slow you down.
+and the faces slow you down. The hops between faces aren't jumps either: the bike keeps the lean it had (no
+whip off a face), and the rider holds it level and pointed down the lane, so a small wobble on the way in
+doesn't grow. Steering through them is slower than on flat ground.
 
 Some corners on every track also have an inside berm: a banked lane cut into the inside of the turn, for a
 shorter, tighter line than the outside berm. It's quicker through some corners and slower through others, so

@@ -372,6 +372,8 @@ landingFolder.add(settings, 'bobbleSpeedLoss', 0, 1, 0.01).name('bobble speed lo
 landingFolder.add(settings, 'bobbleSeconds', 0, 3, 0.05).name('bobble duration');
 landingFolder.add(settings, 'crashRespawnSeconds', 0.5, 10, 0.1).name('crash respawn time');
 landingFolder.add(settings, 'bumpSkim', 0, 1, 0.05).name('rollers / whoops skim');
+landingFolder.add(settings, 'bumpYawSteadying', 0, 4, 0.1).name('whoops: hold line');
+landingFolder.add(settings, 'bumpPitchSteadying', 0, 1500, 50).name('whoops: hold level');
 const soundFolder = gui.addFolder('Sound');
 soundFolder.add(soundSettings, 'volume', 0, 1, 0.05).name('volume');
 soundFolder.add(soundSettings, 'muted').name('mute');

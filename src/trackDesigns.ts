@@ -3,7 +3,8 @@
 // straights[i] runs from corner i to corner i+1. Jumps without sizes are sized for their run-up speed.
 import type { TrackDesign } from './track.ts';
 
-const motocross = { style: 'motocross', landingRoom: 8, cornerClearance: 14, maxDesignSpeed: 22, maxJumpHeight: 4.5 } as const;
+// Doubles span most of how far a fast rider flies them: full gas out of the corner lands early down the landing
+const motocross = { style: 'motocross', landingRoom: 8, cornerClearance: 14, maxDesignSpeed: 22, maxJumpHeight: 4.5, doubleGapShare: 0.9 } as const;
 // Supercross jumps come right out of the turns and sit close together
 const supercross = { style: 'supercross', landingRoom: 4, cornerClearance: 10, maxDesignSpeed: 19, maxJumpHeight: 3.4, jumpSpeedScale: 1.1 } as const;
 
@@ -79,12 +80,12 @@ export const trackDesigns: TrackDesign[] = [
     corners: [
       { x: -120, z: -60, radius: 16 },
       { x: -60, z: -115, radius: 15, height: 6 },
-      { x: 40, z: -95, radius: 14, height: 6 },
+      { x: 44, z: -95, radius: 14, height: 6 },
       { x: 115, z: -115, radius: 15, insideBerm: true, height: 2 },
-      { x: 112, z: -11, radius: 13, height: 2 },
-      { x: 40, z: -35, radius: 13, height: -3 },
+      { x: 112, z: 2, radius: 13, height: 2 },
+      { x: 40, z: -39, radius: 13, height: -3 },
       { x: 30, z: 40, radius: 13, height: -3 },
-      { x: 115, z: 55, radius: 14, height: -3 },
+      { x: 117, z: 55, radius: 14, height: -3 },
       { x: 118, z: 120, radius: 15, height: 2 },
       { x: -58, z: 112, radius: 14, height: 2 },
       { x: -50, z: 24, radius: 13 },
@@ -92,12 +93,12 @@ export const trackDesigns: TrackDesign[] = [
     ],
     straights: [
       [{ kind: 'rollers', count: 3, height: 0.5, spacing: 7 }],
-      [{ kind: 'tabletop' }],
+      [{ kind: 'tabletop', deck: 29 }],
       [{ kind: 'rollers', count: 3, height: 0.5, spacing: 7 }],
-      [{ kind: 'double', lipDegrees: 24, takeoff: 1.6 }],
+      [{ kind: 'double' }],
       [],
       [{ kind: 'rollers', count: 3, height: 0.6, spacing: 6 }],
-      [{ kind: 'step-up', deck: 3 }],
+      [{ kind: 'step-up', deck: 6 }],
       [],
       // The big one: a step-up hit in 3rd gear wide open, up onto a tall deck
       [{ kind: 'step-up', takeoff: 2.4, lipDegrees: 30, rise: 1.6, gap: 35, deck: 14, landingDegrees: 30, landingBottomDegrees: 12, runUp: 45 }],
@@ -125,7 +126,7 @@ export const trackDesigns: TrackDesign[] = [
       [],
       [{ kind: 'rhythm', count: 6, height: 0.7 }, { kind: 'double' }],
       [],
-      [{ kind: 'whoops', count: 10, height: 0.45, spacing: 4.5 }, { kind: 'tabletop', deck: 18 }],
+      [{ kind: 'whoops', count: 10, height: 0.45, spacing: 4.5 }, { kind: 'tabletop', deck: 15 }],
       [],
       [{ kind: 'step-up' }, { kind: 'double' }, { kind: 'rhythm', count: 4, height: 0.7 }],
       [],
@@ -161,16 +162,16 @@ export const trackDesigns: TrackDesign[] = [
     name: 'Night SX',
     ...supercross,
     corners: [
-      { x: -80, z: -30, radius: 7 },
+      { x: -84, z: -30, radius: 7 },
       { x: 55, z: -30, radius: 7, insideBerm: true },
       { x: 55, z: -12, radius: 7, insideBerm: true },
       { x: -5, z: -12, radius: 6 },
       { x: -5, z: 12, radius: 6 },
       { x: -45, z: 12, radius: 6 },
       { x: -45, z: 45, radius: 7 },
-      { x: 80, z: 45, radius: 7, insideBerm: true },
-      { x: 80, z: -55, radius: 7 },
-      { x: -95, z: -55, radius: 7 },
+      { x: 86, z: 45, radius: 7, insideBerm: true },
+      { x: 86, z: -55, radius: 7 },
+      { x: -112, z: -55, radius: 7 },
     ],
     straights: [
       [{ kind: 'rhythm', count: 5, height: 0.7 }, { kind: 'tabletop' }],
@@ -179,9 +180,9 @@ export const trackDesigns: TrackDesign[] = [
       [],
       [],
       [],
-      [{ kind: 'triple', takeoff: 1.8, lipDegrees: 32, gap: 23, landing: 3.8, landingDegrees: 16, runUp: 10 }, { kind: 'rhythm', count: 4, height: 0.7 }],
+      [{ kind: 'triple', takeoff: 1.8, lipDegrees: 32, gap: 23, landing: 3.8, landingDegrees: 16, landingBottomDegrees: 6, runUp: 10 }, { kind: 'rhythm', count: 4, height: 0.7 }],
       [{ kind: 'whoops', count: 10, height: 0.45, spacing: 4.5 }],
-      [{ kind: 'step-on-off', runUp: 8 }, { kind: 'tabletop', deck: 19 }],
+      [{ kind: 'step-on-off', runUp: 8 }, { kind: 'tabletop' }],
       [],
     ],
   },
