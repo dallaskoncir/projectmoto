@@ -142,8 +142,8 @@ export const trackDesigns: TrackDesign[] = [
       { x: 10, z: 30, radius: 7 },
       { x: 10, z: -12, radius: 7 },
       { x: -40, z: -12, radius: 7, insideBerm: true },
-      { x: -40, z: 32, radius: 7 },
-      { x: -80, z: 32, radius: 8 },
+      { x: -40, z: 38, radius: 7 },
+      { x: -80, z: 38, radius: 8 },
     ],
     straights: [
       [{ kind: 'triple', takeoff: 1.8, lipDegrees: 32, gap: 23, landing: 3.8, landingDegrees: 16, runUp: 12 }, { kind: 'rhythm', count: 5, height: 0.7 }],

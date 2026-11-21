@@ -714,7 +714,7 @@ function placeFeatures(design: TrackDesign, straights: { start: number; end: num
       runUp += spec.runUp ?? 0;
       const runUpSpeed = speedAfterRunUp(runUp, entrySpeed);
       const designSpeed = Math.min(design.maxDesignSpeed, runUpSpeed * (design.jumpSpeedScale ?? 1));
-      const feature = buildFeature(spec, designSpeed, runUpSpeed, design.maxJumpHeight, where, design.style);
+      const feature = buildFeature(spec, designSpeed, runUpSpeed, design.maxJumpHeight, where);
       if (cursor + feature.length > straight.end - cornerClearance) {
         throw new Error(`${where}: ${feature.description} needs ${(cursor + feature.length - (straight.end - cornerClearance)).toFixed(1)} m more room`);
       }
@@ -741,7 +741,6 @@ function buildFeature(
   runUpSpeed: number,
   maxHeight: number,
   where: string,
-  style: TrackDesign['style'],
 ): Omit<Jump, 'start'> {
   switch (spec.kind) {
     case 'tabletop': {
@@ -758,22 +757,19 @@ function buildFeature(
     case 'double': {
       // Sized so a full scrub at the design speed still clears it, and without a scrub it lands well down
       // the landing; the landing is as tall as it needs to be (at least the takeoff), and the gap is
-      // re-measured for that height. Motocross doubles get a long landing that curves from steep at the
-      // knuckle to nearly flat at the bottom, reaching out to where a rider 20% over the design speed comes
-      // down, so going long lands on the slope rather than the flat.
+      // re-measured for that height. The landing is long, curving from steep at the knuckle to nearly flat
+      // at the bottom, reaching out to where a rider 20% over the design speed comes down, so going long
+      // lands on the slope rather than the flat.
       const takeoffHeight = spec.takeoff ?? 1.8;
       const lipAngle = (spec.lipDegrees ?? 28) * degrees;
-      const isLongLanding = style === 'motocross';
-      const topAngle = isLongLanding ? doubleLandingTopAngle : landingAngle;
-      const bottomAngle = isLongLanding ? doubleLandingBottomAngle : landingAngle;
+      const topAngle = doubleLandingTopAngle;
+      const bottomAngle = doubleLandingBottomAngle;
       const tallestLanding = Math.min(maxHeight, takeoffHeight + 1.6);
       let landingHeight = takeoffHeight;
       let gap = 0;
       for (let pass = 0; pass < 4; pass++) {
         gap = 0.7 * flightDistance(designSpeed, lipAngle, takeoffHeight, landingHeight);
-        landingHeight = isLongLanding
-          ? curvedLandingHeightFor(designSpeed, lipAngle, takeoffHeight, gap, topAngle, bottomAngle, tallestLanding)
-          : Math.min(tallestLanding, landingHeightFor(designSpeed, lipAngle, takeoffHeight, gap, maxHeight));
+        landingHeight = curvedLandingHeightFor(designSpeed, lipAngle, takeoffHeight, gap, topAngle, bottomAngle, tallestLanding);
       }
       if (gap < (takeoffHeight + landingHeight) / Math.tan(backsideAngle) + 1.5) {
         throw new Error(`${where}: a double needs more speed than ${designSpeed.toFixed(1)} m/s`);
