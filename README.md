@@ -71,8 +71,9 @@ brings one back.
     stick (don't scrub it, or you'll case it), and you can throw it right over and bring it back.
   - **Quarry:** hilly, with a climb out of the first corner up to the tabletop, rollers down off the top, a drop
     into the pit for the step-up and a steep climb out to the big one. The big one is a step-up on the bottom
-    straight, hit in 3rd gear wide open, 35 m up onto a 4 m deck. Back off and you case it (2nd on the limiter
-    only just makes the knuckle). Brake hard after the landing for the corner.
+    straight, hit in 3rd gear wide open, 35 m up onto a 4 m high, 20 m deck. Back off and you case it (2nd on
+    the limiter only just makes the knuckle); come in faster than 3rd gives and you fly right over the deck,
+    which is a crash. Brake hard after the landing for the corner.
 - **Supercross:** Harbor, Dome and Night. Compact stadium layouts with tight 180s, rhythm sections, whoops and
   triples. Night's long back straight has a step-on, step-off: jump up onto a 3 m plateau, get on the gas
   across the top, and jump off the kicker at the far end over a gap to a long landing. Full gas across the
@@ -82,6 +83,13 @@ brings one back.
 Motocross doubles are sized for full gas out of the corner: pinned, you land early down the landing; roll off
 or come out of the corner slow and you case it. Tabletop and triple landings curve, steep at the top and
 flattening out, so an overjump still comes down on the slope.
+
+Landings are judged at touchdown on four things: how far the bike is still laid over (against the slope of
+the ground across the bike, so touching down leaned into a berm is fine), how crossed up it is, how far the
+nose is up or down against the landing, and how hard it hits. A little off is clean, more is a bobble that
+costs speed, and well past it is a crash. Touching down crossed up, the tires snap the bike back in line with a
+hard sideways kick; the rider soaks that up for a moment, so a landing that only bobbles doesn't throw the
+bike over afterwards.
 
 Rollers and whoops aren't judged like jumps: hopping off them never bobbles you (a big crossed-up landing can
 still crash). Stay on the gas through them and the bike skims across the faces and carries its speed; roll off

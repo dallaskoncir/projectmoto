@@ -128,6 +128,10 @@ export const settings = {
   landingImpactCrashSpeed: 14,
   bobbleSpeedLoss: 0.2, // share of speed lost by the worst bobble
   bobbleSeconds: 0.8,
+  // Touching down crossed up or leaned, the tires snap the bike back in line with a hard sideways kick. The
+  // rider soaks that up with their legs and arms for this long after a landing (fading out), so the lean
+  // goes where the stick asks instead of being flung over by the kick
+  landingAbsorbSeconds: 0.5,
   crashRespawnSeconds: 2.5,
   // Rollers and whoops: hops off them aren't judged as jump landings (a crash still counts), and on the gas
   // the bike skims the faces: this share of the backward shove from landing on a face is cancelled
@@ -330,6 +334,7 @@ let timeSinceTakeoff = Infinity;
 const takeoffPosition = new THREE.Vector3();
 let tookOffFromBumps = false;
 let landingLoadTimeRemaining = 0;
+let landingAbsorbTimeRemaining = 0;
 const bikeUpAxis = new THREE.Vector3();
 const flatForwardAxis = new THREE.Vector3();
 const landingSurfaceNormal = new THREE.Vector3();
@@ -359,6 +364,7 @@ export function resetBike(nearX?: number, nearZ?: number) {
   contactsAreStale = true;
   state.crashTimeRemaining = 0;
   bobbleTimeRemaining = 0;
+  landingAbsorbTimeRemaining = 0;
   wasInAir = false;
   whipLeanRate = 0;
   groundLeanRate = 0;
@@ -478,15 +484,40 @@ function landingSeverity(errorDegrees: number, bobbleDegrees: number, crashDegre
   return (errorDegrees - bobbleDegrees) / Math.max(crashDegrees - bobbleDegrees, 0.001);
 }
 
+// A jump that has to be landed on its deck: took off from before its knuckle and touched down past the deck
+function overjumpedDeck(touchingWheelIndex: number) {
+  const contactPoint = vehicle.wheelContactPoint(touchingWheelIndex);
+  if (!contactPoint) return false;
+  const landedAlong = track.nearestCenterlineIndex(contactPoint.x, contactPoint.z) * centerlineSpacing;
+  const tookOffAlong = track.nearestCenterlineIndex(takeoffPosition.x, takeoffPosition.z) * centerlineSpacing;
+  return track.jumps.some((jump) => {
+    if (jump.overjumpCrashAt === undefined) return false;
+    const intoJump = (along: number) => (along - jump.start + track.length) % track.length;
+    const landedInto = intoJump(landedAlong);
+    return intoJump(tookOffAlong) < jump.edges[1] && landedInto > jump.overjumpCrashAt && landedInto < jump.length + 40;
+  });
+}
+
 function judgeLanding() {
-  const leanDegrees = Math.abs(THREE.MathUtils.radToDeg(state.bikeLeanRadians));
-  const sidewaysDegrees = Math.abs(THREE.MathUtils.radToDeg(yawFromTravelRadians()));
-  // Pitch: angle between the bike's up axis and the surface under the wheel that touched down
   const touchingWheelIndex = vehicle.wheelIsInContact(rearWheelIndex) ? rearWheelIndex : frontWheelIndex;
+  if (overjumpedDeck(touchingWheelIndex)) {
+    crash('overjumped the deck');
+    return;
+  }
   const contactNormal = vehicle.wheelContactNormal(touchingWheelIndex);
-  bikeUpAxis.set(0, 1, 0).applyQuaternion(bikeQuaternion);
   if (contactNormal) landingSurfaceNormal.set(contactNormal.x, contactNormal.y, contactNormal.z);
-  const pitchDegrees = contactNormal ? THREE.MathUtils.radToDeg(bikeUpAxis.angleTo(landingSurfaceNormal)) : 0;
+  else landingSurfaceNormal.copy(worldUp);
+  // Lean against the ground across the bike: touching down leaned into a berm or a banked turn is fine
+  const groundBankAcross = Math.asin(THREE.MathUtils.clamp(landingSurfaceNormal.dot(flatSideAxis), -1, 1));
+  const leanDegrees = Math.abs(THREE.MathUtils.radToDeg(state.bikeLeanRadians - groundBankAcross));
+  const sidewaysDegrees = Math.abs(THREE.MathUtils.radToDeg(yawFromTravelRadians()));
+  // Pitch: nose up or down against the surface under the wheel that touched down, along the way the bike
+  // points (the slope across the bike is the lean's business, so a crossed-up landing on a steep face isn't
+  // counted twice). Upside down reads past 90°.
+  bikeUpAxis.set(0, 1, 0).applyQuaternion(bikeQuaternion);
+  const pitchDegrees = Math.abs(
+    THREE.MathUtils.radToDeg(Math.atan2(bikeForwardAxis.dot(landingSurfaceNormal), bikeUpAxis.dot(landingSurfaceNormal))),
+  );
   // Impact: how fast the bike is moving into the landing surface. Overjumping onto the flat is high,
   // landing on a downslope that matches the jump is low.
   const velocity = chassisBody.linvel();
@@ -957,10 +988,12 @@ function balanceAndSteer(forwardSpeed: number, groundBank: number) {
   // With a foot down the lean is just held near upright. A sideways jolt bigger than the tires (and bank)
   // could ever give, like hitting a berm face or a rut's edge at an angle, goes into the chassis and the
   // rider's legs, not into flinging the lean over.
-  const deliveredLateralAcceleration = THREE.MathUtils.clamp(
-    state.lateralAcceleration,
-    -settings.lateralJoltLimit * maxCorneringAcceleration,
-    settings.lateralJoltLimit * maxCorneringAcceleration,
+  // Just after a landing the rider soaks up the kick of the tires snapping a crossed-up bike back in line.
+  const landingAbsorb = landingAbsorbTimeRemaining > 0 ? landingAbsorbTimeRemaining / Math.max(settings.landingAbsorbSeconds, 0.001) : 0;
+  const deliveredLateralAcceleration = THREE.MathUtils.lerp(
+    THREE.MathUtils.clamp(state.lateralAcceleration, -settings.lateralJoltLimit * maxCorneringAcceleration, settings.lateralJoltLimit * maxCorneringAcceleration),
+    neededLateralAcceleration,
+    landingAbsorb,
   );
   const pendulumLeanAcceleration =
     (support * Math.sin(bodyLean) - deliveredLateralAcceleration * Math.cos(bodyLean)) / pendulumHeight + riderLeanAcceleration;
@@ -1066,6 +1099,7 @@ export function physicsStep() {
     state.lastJump.preloadPercent = takeoffPreloadPercent;
     state.lastJump.landingLoad = 0;
     landingLoadTimeRemaining = 0.3;
+    landingAbsorbTimeRemaining = settings.landingAbsorbSeconds;
     judgeLanding();
     if (state.crashTimeRemaining > 0) return;
   }
@@ -1278,6 +1312,7 @@ export function physicsStep() {
   updatePreload(isInAir);
   wasInAir = isInAir;
 
+  landingAbsorbTimeRemaining = Math.max(0, landingAbsorbTimeRemaining - physicsTimestep);
   if (landingLoadTimeRemaining > 0) {
     // Peak combined suspension force in the landing, in multiples of the bike's weight
     const suspensionForce = (vehicle.wheelSuspensionForce(frontWheelIndex) ?? 0) + (vehicle.wheelSuspensionForce(rearWheelIndex) ?? 0);

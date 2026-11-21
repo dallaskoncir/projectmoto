@@ -87,7 +87,7 @@ export const trackDesigns: TrackDesign[] = [
       { x: 30, z: 40, radius: 13, height: -3 },
       { x: 117, z: 55, radius: 14, height: -3 },
       { x: 118, z: 120, radius: 15, height: 2 },
-      { x: -58, z: 112, radius: 14, height: 2 },
+      { x: -61, z: 112, radius: 14, height: 2 },
       { x: -50, z: 24, radius: 13 },
       { x: -118, z: 40, radius: 14, insideBerm: true },
     ],
@@ -100,8 +100,8 @@ export const trackDesigns: TrackDesign[] = [
       [{ kind: 'rollers', count: 3, height: 0.6, spacing: 6 }],
       [{ kind: 'step-up', deck: 6 }],
       [],
-      // The big one: a step-up hit in 3rd gear wide open, up onto a tall deck
-      [{ kind: 'step-up', takeoff: 2.4, lipDegrees: 30, rise: 1.6, gap: 35, deck: 14, landingDegrees: 30, landingBottomDegrees: 12, runUp: 45 }],
+      // The big one: a step-up hit in 3rd gear wide open, up onto a tall deck. Fly right over the deck and you crash.
+      [{ kind: 'step-up', takeoff: 2.4, lipDegrees: 30, rise: 1.6, gap: 35, deck: 20, landingDegrees: 30, landingBottomDegrees: 12, runUp: 45, overjumpCrashes: true }],
       [{ kind: 'rollers', count: 3, height: 0.6, spacing: 7 }],
       [],
       [{ kind: 'double' }],

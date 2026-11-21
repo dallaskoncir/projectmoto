@@ -15,10 +15,11 @@ const featureReach = trackHalfWidth + 10; // how far from the centerline track s
 // flat ground before a feature on top of the usual spacing. `speed` sizes a tabletop or step-up for that lip
 // speed instead (past the track's usual limit, for a big one), as long as the run-up can reach it.
 // `landingBottomDegrees` curves a landing from landingDegrees at the knuckle to that at the bottom.
+// `overjumpCrashes` on a step-up: flying right over its deck (touching down past the end of it) is a crash.
 export type FeatureSpec = { runUp?: number } & (
   | { kind: 'tabletop'; lipDegrees?: number; height?: number; deck?: number; speed?: number; landingDegrees?: number; landingBottomDegrees?: number }
   | { kind: 'double'; lipDegrees?: number; takeoff?: number }
-  | { kind: 'step-up'; takeoff?: number; rise?: number; deck?: number; lipDegrees?: number; speed?: number; gap?: number; landingDegrees?: number; landingBottomDegrees?: number }
+  | { kind: 'step-up'; takeoff?: number; rise?: number; deck?: number; lipDegrees?: number; speed?: number; gap?: number; landingDegrees?: number; landingBottomDegrees?: number; overjumpCrashes?: boolean }
   | { kind: 'step-on-off'; takeoff?: number; deckHeight?: number; deck?: number; kickHeight?: number; kickDegrees?: number }
   | { kind: 'big double' | 'triple' | 'whip jump'; takeoff: number; lipDegrees: number; gap: number; landing: number; landingDegrees: number; landingBottomDegrees?: number }
   | { kind: 'rollers' | 'whoops'; count: number; height: number; spacing: number }
@@ -59,6 +60,7 @@ export type Jump = {
   edgeHeights: number[];
   description: string;
   designSpeed: number; // lip speed (m/s) it's sized for: landing just past the knuckle
+  overjumpCrashAt?: number; // distance (from start) past which touching down off this jump's lip is a crash
 };
 
 const degrees = Math.PI / 180;
@@ -818,7 +820,9 @@ function buildFeature(
       }
       const topAngle = spec.landingDegrees === undefined ? landingAngle : spec.landingDegrees * degrees;
       const bottomAngle = spec.landingBottomDegrees === undefined ? topAngle : spec.landingBottomDegrees * degrees;
-      return gapJump('step-up', takeoffHeight, lipAngle, gap, landingHeight, topAngle, speed, spec.deck ?? 6.5, bottomAngle);
+      const deck = spec.deck ?? 6.5;
+      const stepUp = gapJump('step-up', takeoffHeight, lipAngle, gap, landingHeight, topAngle, speed, deck, bottomAngle);
+      return spec.overjumpCrashes ? { ...stepUp, overjumpCrashAt: stepUp.edges[1] + deck } : stepUp;
     }
     case 'step-on-off': {
       // Step on: like a step-up, sized so the design speed lands on the deck past the knuckle. The deck is

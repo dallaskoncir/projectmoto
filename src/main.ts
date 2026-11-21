@@ -370,6 +370,7 @@ landingFolder.add(settings, 'landingImpactBobbleSpeed', 0, 20, 0.1).name('impact
 landingFolder.add(settings, 'landingImpactCrashSpeed', 0, 30, 0.1).name('impact crash speed');
 landingFolder.add(settings, 'bobbleSpeedLoss', 0, 1, 0.01).name('bobble speed loss');
 landingFolder.add(settings, 'bobbleSeconds', 0, 3, 0.05).name('bobble duration');
+landingFolder.add(settings, 'landingAbsorbSeconds', 0, 1.5, 0.05).name('rider soaks up landing kick (s)');
 landingFolder.add(settings, 'crashRespawnSeconds', 0.5, 10, 0.1).name('crash respawn time');
 landingFolder.add(settings, 'bumpSkim', 0, 1, 0.05).name('rollers / whoops skim');
 landingFolder.add(settings, 'bumpYawSteadying', 0, 4, 0.1).name('whoops: hold line');
