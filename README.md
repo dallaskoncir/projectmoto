@@ -58,7 +58,9 @@ fraction of a second, and a held lean key stops at the tires' limit (both adjust
 
 ## Tracks
 
-Six fixed tracks, picked from the Track folder in the panel or with the D-pad:
+Six fixed tracks. For now only Quarry and Night are offered in the game (Track folder in the panel, the D-pad
+or `[` `]`); the others are still in the code, and adding a name to `shownTrackNames` in `src/trackDesigns.ts`
+brings one back.
 
 - **Motocross:** Ridgeback, Long Meadow and Quarry. Long straights, sweeping bermed corners, big doubles,
   tabletops, step-ups and rollers, and one big jump each:
@@ -74,6 +76,10 @@ Six fixed tracks, picked from the Track folder in the panel or with the D-pad:
 - **Supercross:** Harbor, Dome and Night. Compact stadium layouts with tight 180s, rhythm sections, whoops and
   triples. Night's long back straight has a step-on, step-off: jump up onto a 3 m plateau, get on the gas
   across the top, and jump off the kicker at the far end over a gap to the landing.
+
+Rollers and whoops aren't judged like jumps: hopping off them never bobbles you (a big crossed-up landing can
+still crash). Stay on the gas through them and the bike skims across the faces and carries its speed; roll off
+and the faces slow you down.
 
 Some corners on every track also have an inside berm: a banked lane cut into the inside of the turn, for a
 shorter, tighter line than the outside berm. It's quicker through some corners and slower through others, so

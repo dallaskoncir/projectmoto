@@ -632,15 +632,23 @@ function measureCorners(tangentX: Float32Array, tangentZ: Float32Array) {
     turnDirection[sample] = Math.sign(smoothed);
   }
   // Ease the berms in and out over about 16 m of track. A berm that rises abruptly along the track is a
-  // bump that throws the bike up and off its tires right where the rider leans in.
+  // bump that throws the bike up and off its tires right where the rider leans in. The ease runs on the
+  // strength signed by turn direction, so between a left and a right close together (an S) one berm fades
+  // out as the other fades in, instead of a full-height berm jumping across the track halfway between.
   const easeWindow = Math.round(8 / centerlineSpacing);
   const eased = new Float32Array(sampleCount);
+  const easedDirection = new Float32Array(sampleCount);
   for (let sample = 0; sample < sampleCount; sample++) {
     let sum = 0;
-    for (let offset = -easeWindow; offset <= easeWindow; offset++) sum += cornerStrength[(sample + offset + sampleCount) % sampleCount];
-    eased[sample] = smoothstep(sum / (2 * easeWindow + 1), 0, 1);
+    for (let offset = -easeWindow; offset <= easeWindow; offset++) {
+      const other = (sample + offset + sampleCount) % sampleCount;
+      sum += cornerStrength[other] * turnDirection[other];
+    }
+    const signed = sum / (2 * easeWindow + 1);
+    eased[sample] = smoothstep(Math.abs(signed), 0, 1);
+    easedDirection[sample] = Math.sign(signed);
   }
-  return { cornerStrength: eased, turnDirection };
+  return { cornerStrength: eased, turnDirection: easedDirection };
 }
 
 // Where the corners flagged with an inside berm are along the track: each one's arc plus a few meters either

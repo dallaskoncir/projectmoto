@@ -186,3 +186,12 @@ export const trackDesigns: TrackDesign[] = [
     ],
   },
 ];
+
+// The tracks offered in the game (panel, D-pad, [ ] keys), by name. The rest stay built and loadable by
+// index (headless tests use them); add a name here to bring one back.
+const shownTrackNames = ['Quarry MX', 'Night SX'];
+export const shownTrackIndices = shownTrackNames.map((name) => {
+  const index = trackDesigns.findIndex((design) => design.name === name);
+  if (index < 0) throw new Error(`shownTrackNames: no track called ${name}`);
+  return index;
+});

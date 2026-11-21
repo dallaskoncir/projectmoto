@@ -1,8 +1,8 @@
 // Bike physics, track and riding rules. No rendering or browser code, so it also runs headless in Node.
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { buildTrack, cellsPerSide, centerlineSpacing, mapSize, speedAfterRunUp, type Track } from './track.ts';
-import { trackDesigns } from './trackDesigns.ts';
+import { buildTrack, cellsPerSide, centerlineSpacing, mapSize, speedAfterRunUp, trackHalfWidth, type Track } from './track.ts';
+import { shownTrackIndices, trackDesigns } from './trackDesigns.ts';
 
 // Every value that affects feel. Edited live by the panel; "copy settings" exports this as JSON.
 export const settings = {
@@ -103,7 +103,7 @@ export const settings = {
   centerOfMassHeight: -0.15, // relative to the chassis box center; lower = harder to wheelie or loop
   gravity: 9.81,
 
-  trackIndex: 0, // which of trackDesigns (trackDesigns.ts) is loaded
+  trackIndex: shownTrackIndices[0], // which of trackDesigns (trackDesigns.ts) is loaded
 
   cameraDistance: 6,
   cameraHeight: 2.2,
@@ -129,6 +129,9 @@ export const settings = {
   bobbleSpeedLoss: 0.2, // share of speed lost by the worst bobble
   bobbleSeconds: 0.8,
   crashRespawnSeconds: 2.5,
+  // Rollers and whoops: hops off them aren't judged as jump landings (a crash still counts), and on the gas
+  // the bike skims the faces: this share of the backward shove from landing on a face is cancelled
+  bumpSkim: 0.7,
 };
 
 // Written by the input code. Sticks are -1..1 after the deadzone, triggers 0..1.
@@ -188,8 +191,30 @@ export function loadTrack(trackIndex: number, withJumps = true) {
   world.removeCollider(terrainCollider, false);
   track = buildTrack(trackDesigns[settings.trackIndex], withJumps);
   terrainCollider = createTerrainCollider(track);
+  markBumpSections();
   state.trackVersion++;
   resetBike();
+}
+
+// Centerline samples covered by rollers or whoops, plus a little past the last bump for the hop off it
+let bumpSectionSamples = new Uint8Array(0);
+function markBumpSections() {
+  const sampleCount = track.centerlineX.length;
+  bumpSectionSamples = new Uint8Array(sampleCount);
+  for (const jump of track.jumps) {
+    if (jump.kind !== 'rollers' && jump.kind !== 'whoops') continue;
+    for (let distance = jump.start - 1; distance <= jump.start + jump.length + 2; distance += centerlineSpacing) {
+      bumpSectionSamples[((Math.round(distance / centerlineSpacing) % sampleCount) + sampleCount) % sampleCount] = 1;
+    }
+  }
+}
+
+function isOnBumpSection() {
+  const position = chassisBody.translation();
+  const sample = track.nearestCenterlineIndex(position.x, position.z);
+  if (!bumpSectionSamples[sample]) return false;
+  const offCenter = Math.hypot(position.x - track.centerlineX[sample], position.z - track.centerlineZ[sample]);
+  return offCenter < trackHalfWidth + 1;
 }
 
 // Chassis: bike local axes are +X forward, +Y up, +Z to the rider's right
@@ -287,8 +312,10 @@ let preloadRelease = 0;
 let preloadReleaseTimeRemaining = 0;
 let timeSinceTakeoff = Infinity;
 const takeoffPosition = new THREE.Vector3();
+let tookOffFromBumps = false;
 let landingLoadTimeRemaining = 0;
 const bikeUpAxis = new THREE.Vector3();
+const flatForwardAxis = new THREE.Vector3();
 const landingSurfaceNormal = new THREE.Vector3();
 const leanTransferRotation = new THREE.Quaternion();
 let bobbleTimeRemaining = 0;
@@ -462,7 +489,7 @@ function judgeLanding() {
 
   if (worstCheck.severity >= 1) {
     crash(description);
-  } else if (worstCheck.severity > 0) {
+  } else if (worstCheck.severity > 0 && !tookOffFromBumps) {
     bobbleSeverity = worstCheck.severity;
     bobbleTimeRemaining = settings.bobbleSeconds;
     const velocity = chassisBody.linvel();
@@ -510,6 +537,25 @@ function applyGroundSidePush() {
     const sidewaysImpulse = ((suspensionForce * across) / Math.max(normal.y, 0.5)) * physicsTimestep;
     chassisBody.applyImpulse({ x: flatSideAxis.x * sidewaysImpulse, y: 0, z: flatSideAxis.z * sidewaysImpulse }, true);
   }
+}
+
+// The ground pushes a wheel along its surface normal, so each wheel on the face of a roller or whoop
+// shoves the bike backward. A rider on the gas skims across instead: cancel part of that backward shove
+// (more gas, more skim). Backsides that push the bike forward are left alone.
+function applyBumpSkim(throttle: number) {
+  flatForwardAxis.set(bikeForwardAxis.x, 0, bikeForwardAxis.z);
+  if (flatForwardAxis.lengthSq() < 0.01) return;
+  flatForwardAxis.normalize();
+  const skim = settings.bumpSkim * Math.min(1, throttle * 2);
+  let forwardImpulse = 0;
+  for (const wheelIndex of [rearWheelIndex, frontWheelIndex]) {
+    const normal = vehicle.wheelIsInContact(wheelIndex) ? vehicle.wheelContactNormal(wheelIndex) : null;
+    if (!normal) continue;
+    const normalAlongTravel = normal.x * flatForwardAxis.x + normal.z * flatForwardAxis.z;
+    if (normalAlongTravel >= 0) continue;
+    forwardImpulse -= (vehicle.wheelSuspensionForce(wheelIndex) ?? 0) * normalAlongTravel * skim * physicsTimestep;
+  }
+  chassisBody.applyImpulse({ x: flatForwardAxis.x * forwardImpulse, y: 0, z: flatForwardAxis.z * forwardImpulse }, true);
 }
 
 // ---------- Engine and gearbox ----------
@@ -1195,6 +1241,7 @@ export function physicsStep() {
     takeoffPreloadPercent = 0;
     const position = chassisBody.translation();
     takeoffPosition.set(position.x, 0, position.z);
+    tookOffFromBumps = isOnBumpSection();
     currentAirTime = 0;
     timeSinceTakeoff = 0;
   }
@@ -1233,6 +1280,7 @@ export function physicsStep() {
 
   vehicle.updateVehicle(physicsTimestep);
   applyGroundSidePush();
+  if (!isInAir && settings.bumpSkim > 0 && isOnBumpSection()) applyBumpSkim(throttle);
   applyLockedTireSlide();
   if (!isInAir) applyRearSlideDrag();
   world.step();

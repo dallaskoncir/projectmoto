@@ -18,7 +18,7 @@ import {
   wheelRadius,
 } from './simulation.ts';
 import { cellSize, cellsPerSide, centerlineSpacing, mapSize, trackHalfWidth } from './track.ts';
-import { trackDesigns } from './trackDesigns.ts';
+import { shownTrackIndices, trackDesigns } from './trackDesigns.ts';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { createBikeModel } from './bikeModel.ts';
 import { isSoundRunning, soundSettings, unlockSound, updateBikeSound } from './bikeSound.ts';
@@ -371,6 +371,7 @@ landingFolder.add(settings, 'landingImpactCrashSpeed', 0, 30, 0.1).name('impact 
 landingFolder.add(settings, 'bobbleSpeedLoss', 0, 1, 0.01).name('bobble speed loss');
 landingFolder.add(settings, 'bobbleSeconds', 0, 3, 0.05).name('bobble duration');
 landingFolder.add(settings, 'crashRespawnSeconds', 0.5, 10, 0.1).name('crash respawn time');
+landingFolder.add(settings, 'bumpSkim', 0, 1, 0.05).name('rollers / whoops skim');
 const soundFolder = gui.addFolder('Sound');
 soundFolder.add(soundSettings, 'volume', 0, 1, 0.05).name('volume');
 soundFolder.add(soundSettings, 'muted').name('mute');
@@ -379,7 +380,7 @@ window.addEventListener('pointerdown', unlockSound);
 window.addEventListener('keydown', unlockSound);
 
 const trackFolder = gui.addFolder('Track');
-const trackChoices = Object.fromEntries(trackDesigns.map((design, index) => [`${design.name} (${design.style})`, index]));
+const trackChoices = Object.fromEntries(shownTrackIndices.map((index) => [`${trackDesigns[index].name} (${trackDesigns[index].style})`, index]));
 const layoutController = trackFolder
   .add(settings, 'trackIndex', trackChoices)
   .name('track (D-pad left/right)')
@@ -672,7 +673,13 @@ function frame(now: number) {
   readInput(frameSeconds);
   if (resetPressed && !resetWasPressed) resetBike();
   resetWasPressed = resetPressed;
-  if (trackStepPressed !== 0 && trackStepWasPressed === 0) loadTrack(settings.trackIndex + trackStepPressed);
+  if (trackStepPressed !== 0 && trackStepWasPressed === 0) {
+    // Step through the shown tracks only (from a hidden one, start at the first)
+    const position = shownTrackIndices.indexOf(settings.trackIndex);
+    const count = shownTrackIndices.length;
+    const next = position < 0 ? 0 : (position + trackStepPressed + count) % count;
+    loadTrack(shownTrackIndices[next]);
+  }
   trackStepWasPressed = trackStepPressed;
   if (cameraTogglePressed && !cameraToggleWasPressed) {
     settings.firstPerson = !settings.firstPerson;
