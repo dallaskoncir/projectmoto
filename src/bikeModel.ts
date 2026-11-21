@@ -19,23 +19,26 @@ export type BikePose = {
 
 // ---------- Materials ----------
 
+// Physically based: the scene's sky environment map does most of the work, so metals are fully metallic
+// and plastics and the helmet get a glossy clear coat that picks up the sky. Riding gear is cloth (sheen).
 // Yamaha racing blue plastics with white side panels
-const plastic = new THREE.MeshStandardMaterial({ color: 0x1240b0, roughness: 0.45 });
-const plasticWhite = new THREE.MeshStandardMaterial({ color: 0xf1f1ee, roughness: 0.5 });
-const seatBlack = new THREE.MeshStandardMaterial({ color: 0x1b1c1f, roughness: 0.85 });
-const rubber = new THREE.MeshStandardMaterial({ color: 0x1d1d1d, roughness: 0.95 });
-const frameMetal = new THREE.MeshStandardMaterial({ color: 0xb9bdc4, metalness: 0.6, roughness: 0.35 });
-const engineMetal = new THREE.MeshStandardMaterial({ color: 0x3b3e44, metalness: 0.5, roughness: 0.5 });
-const darkMetal = new THREE.MeshStandardMaterial({ color: 0x26282d, metalness: 0.5, roughness: 0.45 });
-const chrome = new THREE.MeshStandardMaterial({ color: 0xdfe3e8, metalness: 0.9, roughness: 0.2 });
-const springYellow = new THREE.MeshStandardMaterial({ color: 0xe8c12c, roughness: 0.5 });
-const jersey = new THREE.MeshStandardMaterial({ color: 0xeceae6, roughness: 0.8 });
-const jerseyTrim = new THREE.MeshStandardMaterial({ color: 0x1240b0, roughness: 0.8 });
-const pants = new THREE.MeshStandardMaterial({ color: 0x24272e, roughness: 0.85 });
-const boots = new THREE.MeshStandardMaterial({ color: 0xe9e9e6, roughness: 0.6 });
-const gloves = new THREE.MeshStandardMaterial({ color: 0x24272e, roughness: 0.8 });
-const helmetShell = new THREE.MeshStandardMaterial({ color: 0xf1f1ee, roughness: 0.35 });
-const gogglesLens = new THREE.MeshStandardMaterial({ color: 0xff8a1f, metalness: 0.4, roughness: 0.2 });
+const plastic = new THREE.MeshPhysicalMaterial({ color: 0x1240b0, roughness: 0.5, clearcoat: 0.6, clearcoatRoughness: 0.25 });
+const plasticWhite = new THREE.MeshPhysicalMaterial({ color: 0xf1f1ee, roughness: 0.55, clearcoat: 0.5, clearcoatRoughness: 0.3 });
+const seatBlack = new THREE.MeshStandardMaterial({ color: 0x1b1c1f, roughness: 0.75 });
+const rubber = new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.92 });
+const frameMetal = new THREE.MeshStandardMaterial({ color: 0xc4c8cf, metalness: 1, roughness: 0.32 }); // polished aluminum
+const engineMetal = new THREE.MeshStandardMaterial({ color: 0x3a3d43, metalness: 0.85, roughness: 0.55 }); // cast cases
+const darkMetal = new THREE.MeshStandardMaterial({ color: 0x2a2c31, metalness: 0.9, roughness: 0.4 }); // anodized black
+const chrome = new THREE.MeshStandardMaterial({ color: 0xe6e9ee, metalness: 1, roughness: 0.12 });
+const springYellow = new THREE.MeshPhysicalMaterial({ color: 0xe8c12c, roughness: 0.35, clearcoat: 0.8, clearcoatRoughness: 0.2 });
+const jersey = new THREE.MeshPhysicalMaterial({ color: 0xeceae6, roughness: 0.85, sheen: 0.6, sheenRoughness: 0.7, sheenColor: 0xffffff });
+const jerseyTrim = new THREE.MeshPhysicalMaterial({ color: 0x1240b0, roughness: 0.85, sheen: 0.6, sheenRoughness: 0.7, sheenColor: 0x6d8ee0 });
+const pants = new THREE.MeshPhysicalMaterial({ color: 0x24272e, roughness: 0.85, sheen: 0.5, sheenRoughness: 0.6, sheenColor: 0x8a8f9a });
+const boots = new THREE.MeshPhysicalMaterial({ color: 0xe9e9e6, roughness: 0.45, clearcoat: 0.3, clearcoatRoughness: 0.4 });
+const gloves = new THREE.MeshPhysicalMaterial({ color: 0x24272e, roughness: 0.8, sheen: 0.4, sheenRoughness: 0.6, sheenColor: 0x8a8f9a });
+const helmetShell = new THREE.MeshPhysicalMaterial({ color: 0xf1f1ee, roughness: 0.35, clearcoat: 1, clearcoatRoughness: 0.08 });
+// Mirrored orange goggle lens
+const gogglesLens = new THREE.MeshPhysicalMaterial({ color: 0xff8a1f, metalness: 0.7, roughness: 0.08, clearcoat: 1, clearcoatRoughness: 0.05 });
 
 // ---------- Shape helpers ----------
 

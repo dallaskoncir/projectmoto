@@ -19,6 +19,7 @@ import {
 } from './simulation.ts';
 import { cellSize, cellsPerSide, centerlineSpacing, mapSize, trackHalfWidth } from './track.ts';
 import { trackDesigns } from './trackDesigns.ts';
+import { Sky } from 'three/addons/objects/Sky.js';
 import { createBikeModel } from './bikeModel.ts';
 import { isSoundRunning, soundSettings, unlockSound, updateBikeSound } from './bikeSound.ts';
 import { keyboardSettings, readKeyboard } from './keyboardInput.ts';
@@ -29,44 +30,134 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
+// Filmic tone mapping keeps the bright sky and sunlit plastics from clipping to flat white
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.8;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xb8c6d1);
-scene.fog = new THREE.Fog(0xb8c6d1, 80, 260);
 
 const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 500);
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0x666655, 1.2));
-const sunLight = new THREE.DirectionalLight(0xffffff, 2);
+// Afternoon sun, a little warm. The sky, its reflections and the shadows all come from the same direction.
+const sunOffset = new THREE.Vector3(15, 30, 10);
+const sunDirection = sunOffset.clone().normalize();
+
+// A physical sky with drifting clouds, drawn behind everything (the shader pins it to the far plane)
+const sky = new Sky();
+sky.scale.setScalar(1000);
+const skyUniforms = sky.material.uniforms;
+skyUniforms.turbidity.value = 3;
+skyUniforms.rayleigh.value = 1.2;
+skyUniforms.mieCoefficient.value = 0.004;
+skyUniforms.mieDirectionalG.value = 0.85;
+skyUniforms.cloudCoverage.value = 0.35;
+skyUniforms.sunPosition.value.copy(sunDirection);
+
+// Image-based lighting: the sky over a dirt-and-grass ground, blurred into an environment map, lights and
+// reflects on every material (metal looks like metal, plastic picks up the sky). Built once at startup.
+{
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const environmentScene = new THREE.Scene();
+  skyUniforms.showSunDisc.value = 0; // the sun disc makes speckles in a blurred map; the sun light covers it
+  environmentScene.add(sky);
+  const environmentGround = new THREE.Mesh(
+    new THREE.CircleGeometry(400, 32).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0x4a4434 }),
+  );
+  environmentGround.position.y = -1;
+  environmentScene.add(environmentGround);
+  scene.environment = pmrem.fromScene(environmentScene, 0.04).texture;
+  scene.environmentIntensity = 0.12;
+  skyUniforms.showSunDisc.value = 1;
+  environmentGround.geometry.dispose();
+  pmrem.dispose();
+}
+scene.add(sky);
+// Haze toward the horizon, the color of the sky low down, so the far ground melts into it
+const hazeColor = new THREE.Color(0xc9d3dc);
+scene.fog = new THREE.Fog(hazeColor, 90, 300);
+
+// Warm bounce off the dirt and a little sky fill on top of the environment map, so shade isn't sky-blue
+scene.add(new THREE.HemisphereLight(0xdfe6ee, 0x8a6f4e, 0.5));
+const sunLight = new THREE.DirectionalLight(0xffeed6, 3.2);
 sunLight.castShadow = true;
 sunLight.shadow.mapSize.set(2048, 2048);
 sunLight.shadow.normalBias = 0.03; // stops the ramp's sloped faces from shadowing themselves (grainy stripes)
+sunLight.shadow.radius = 3; // softer shadow edges
 sunLight.shadow.camera.left = -25;
 sunLight.shadow.camera.right = 25;
 sunLight.shadow.camera.top = 25;
 sunLight.shadow.camera.bottom = -25;
 scene.add(sunLight, sunLight.target);
-const sunOffset = new THREE.Vector3(15, 30, 10);
 
 // ---------- Terrain ----------
 
-// A 2 m grid laid over the ground in world space makes speed readable
-const gridCanvas = document.createElement('canvas');
-gridCanvas.width = gridCanvas.height = 64;
-const gridContext = gridCanvas.getContext('2d')!;
-gridContext.fillStyle = '#ffffff';
-gridContext.fillRect(0, 0, 64, 64);
-gridContext.fillStyle = '#d4d0c8';
-gridContext.fillRect(0, 0, 64, 2);
-gridContext.fillRect(0, 0, 2, 64);
-const gridTexture = new THREE.CanvasTexture(gridCanvas);
-gridTexture.wrapS = gridTexture.wrapT = THREE.RepeatWrapping;
-gridTexture.anisotropy = 8;
+// Ground texture, one tile per 2 m: fine grit and clods so the dirt has grain up close, with a faint grid
+// line along two edges so speed stays readable. The same grit drives a bump map for shading in low sun.
+const groundTextureSize = 256;
+function tileableNoise(size: number, cells: number, seed: number) {
+  // Value noise on a lattice that wraps, so the tile repeats seamlessly
+  const lattice = Array.from({ length: cells * cells }, (_, index) => {
+    const hashed = Math.sin(index * 127.1 + seed * 311.7) * 43758.5453;
+    return hashed - Math.floor(hashed);
+  });
+  const values = new Float32Array(size * size);
+  const smooth = (t: number) => t * t * (3 - 2 * t);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const cellX = (x / size) * cells, cellY = (y / size) * cells;
+      const x0 = Math.floor(cellX), y0 = Math.floor(cellY);
+      const tx = smooth(cellX - x0), ty = smooth(cellY - y0);
+      const at = (i: number, j: number) => lattice[((j % cells) * cells) + (i % cells)];
+      const top = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * tx;
+      const bottom = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * tx;
+      values[y * size + x] = top + (bottom - top) * ty;
+    }
+  }
+  return values;
+}
+const clods = tileableNoise(groundTextureSize, 16, 1);
+const grit = tileableNoise(groundTextureSize, 64, 2);
+const sand = tileableNoise(groundTextureSize, 128, 3);
+function groundCanvas(shade: (index: number, onGridLine: boolean) => number) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = groundTextureSize;
+  const context = canvas.getContext('2d')!;
+  const image = context.createImageData(groundTextureSize, groundTextureSize);
+  for (let y = 0; y < groundTextureSize; y++) {
+    for (let x = 0; x < groundTextureSize; x++) {
+      const index = y * groundTextureSize + x;
+      const value = Math.round(255 * THREE.MathUtils.clamp(shade(index, x < 3 || y < 3), 0, 1));
+      image.data.set([value, value, value, 255], index * 4);
+    }
+  }
+  context.putImageData(image, 0, 0);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return texture;
+}
+const gridTexture = groundCanvas((index, onGridLine) => (onGridLine ? 0.78 : 0.8 + 0.1 * clods[index] + 0.07 * grit[index] + 0.05 * sand[index]));
 gridTexture.colorSpace = THREE.SRGBColorSpace;
+const groundBumpTexture = groundCanvas((index) => 0.5 * clods[index] + 0.3 * grit[index] + 0.2 * sand[index]);
 
-const terrainMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, map: gridTexture, roughness: 0.95 });
-const offTrackColor = new THREE.Color(0x7d8a6a);
+// Large patches of lighter and darker ground (a few meters across) so the color isn't flat
+function groundPatchiness(x: number, z: number) {
+  const wave = Math.sin(x * 0.11 + Math.sin(z * 0.07) * 2) * Math.sin(z * 0.13 + Math.sin(x * 0.05) * 2);
+  const fine = Math.sin(x * 0.37 + z * 0.21) * Math.sin(z * 0.41 - x * 0.17);
+  return 1 + 0.07 * wave + 0.03 * fine;
+}
+
+const terrainMaterial = new THREE.MeshStandardMaterial({
+  vertexColors: true,
+  map: gridTexture,
+  bumpMap: groundBumpTexture,
+  bumpScale: 0.5,
+  roughness: 1,
+  envMapIntensity: 0.35, // dirt barely reflects; keeps the ground from looking washed out by the sky
+});
+const offTrackColor = new THREE.Color(0x6e8a4c);
 const trackColor = new THREE.Color(0x9a7650);
 const raisedDirtColor = new THREE.Color(0xc28a4a); // jumps and berms
 const edgeMarkerMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
@@ -96,6 +187,7 @@ function buildTerrainMesh() {
       uvs.set([x / 2, z / 2], pointIndex * 2);
       color.copy(offTrackColor).lerp(trackColor, track.onTrack[pointIndex]);
       color.lerp(raisedDirtColor, Math.min(1, Math.abs(height - track.groundHeights[pointIndex]) / 1.2) * Math.max(track.onTrack[pointIndex], 0.6));
+      color.multiplyScalar(groundPatchiness(x, z));
       colors.set([color.r, color.g, color.b], pointIndex * 3);
     }
   }
@@ -618,6 +710,7 @@ function frame(now: number) {
   updateCamera(frameSeconds, justReset);
   updateHud(frameSeconds);
   updateBikeSound(frameSeconds);
+  skyUniforms.time.value += frameSeconds * 5; // slow cloud drift
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
