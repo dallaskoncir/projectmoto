@@ -95,7 +95,7 @@ function buildTerrainMesh() {
       positions.set([x, height, z], pointIndex * 3);
       uvs.set([x / 2, z / 2], pointIndex * 2);
       color.copy(offTrackColor).lerp(trackColor, track.onTrack[pointIndex]);
-      color.lerp(raisedDirtColor, Math.min(1, Math.abs(height) / 1.2) * Math.max(track.onTrack[pointIndex], 0.6));
+      color.lerp(raisedDirtColor, Math.min(1, Math.abs(height - track.groundHeights[pointIndex]) / 1.2) * Math.max(track.onTrack[pointIndex], 0.6));
       colors.set([color.r, color.g, color.b], pointIndex * 3);
     }
   }
@@ -132,7 +132,7 @@ function buildTerrainMesh() {
     jump.edges.forEach((edge, edgeIndex) => {
       const sample = Math.round((jump.start + edge) / centerlineSpacing) % sampleCount;
       const marker = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.04, trackHalfWidth * 2), edgeMarkerMaterial);
-      marker.position.set(track.centerlineX[sample], jump.edgeHeights[edgeIndex] + 0.02, track.centerlineZ[sample]);
+      marker.position.set(track.centerlineX[sample], track.elevation[sample] + jump.edgeHeights[edgeIndex] + 0.02, track.centerlineZ[sample]);
       marker.rotation.y = Math.atan2(-track.tangentZ[sample], track.tangentX[sample]);
       edgeMarkers.add(marker);
     });

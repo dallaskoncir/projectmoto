@@ -18,7 +18,7 @@ export const settings = {
   gearbox: 'manual' as 'automatic' | 'manual',
   frontSprocket: 13,
   rearSprocket: 50,
-  enginePowerScale: 0.66, // share of a stock YZ250F's torque at the rear wheel (1 = stock); flat out it reaches most lips a bit faster than they need, so roll off to match
+  enginePowerScale: 1, // share of a stock YZ250F's torque at the rear wheel (1 = stock); flat out it reaches most lips faster than they need, so roll off to match
   revLimitRpm: 14000,
   autoUpshiftRpm: 12500, // automatic shifts up here, near peak power
   autoDownshiftRpm: 8000, // and down when the revs drop under this (if the gear below has room)
@@ -46,7 +46,7 @@ export const settings = {
   // Cornering. Bike and rider together balance like an inverted pendulum: gravity pulls the lean over,
   // the tires' cornering force pushes it back up. The left stick asks for a lean and the rider's balance
   // steers the bars (countersteering first) to get there. The turn comes from the lean.
-  throttleRearGripUse: 2, // how much of the rear's grip the engine's drive uses up (1 = all of it, the friction circle); more = the rear steps out on the gas sooner
+  throttleRearGripUse: 1, // how much of the rear's grip the engine's drive uses up (1 = all of it, the friction circle); more = the rear steps out on the gas sooner
   fullStickOverLeanDegrees: 8, // how much more lean than the tires hold a full left stick asks for; about 85% stick is right at the limit
   bermNoSlideBankDegrees: 10, // a berm banked this much holds a full stick without the rear stepping out
   bermStickShare: 0.6, // share of the extra lean a berm's bank allows that a full stick asks for; the rest is margin before the rear steps out

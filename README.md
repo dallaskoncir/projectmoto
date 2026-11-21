@@ -62,12 +62,13 @@ Six fixed tracks, picked from the Track folder in the panel or with the D-pad:
   tabletops, step-ups and rollers, and one big jump each:
   - **Ridgeback:** a 5.5 m tabletop with a steep 33° face, a long deck and a curved landing at the start of
     the top straight. Full gas lands down the landing; come up short and you land on the deck.
-  - **Long Meadow:** the whip jump on the start straight: a tall, steep 40° lip over a 32 m gap to a long
+  - **Long Meadow:** the whip jump on the start straight: a tall, steep 40° lip over a 38 m gap to a long
     curved landing, for about 2.5 s of air. Pin it out of the first corner, lean into the face with the left
     stick (don't scrub it, or you'll case it), and you can throw it right over and bring it back.
-  - **Quarry:** a step-up on the bottom straight, hit in 3rd gear wide open, 31 m up onto a 4 m deck. Back
-    off and you case it (2nd on the limiter only just makes the knuckle). Brake hard after the landing for the
-    corner.
+  - **Quarry:** hilly, with a climb out of the first corner up to the tabletop, rollers down off the top, a drop
+    into the pit for the step-up and a steep climb out to the big one. The big one is a step-up on the bottom
+    straight, hit in 3rd gear wide open, 35 m up onto a 4 m deck. Back off and you case it (2nd on the limiter
+    only just makes the knuckle). Brake hard after the landing for the corner.
 - **Supercross:** Harbor, Dome and Night. Compact stadium layouts with tight 180s, rhythm sections, whoops and
   triples. Night's long back straight has a step-on, step-off: jump up onto a 3 m plateau, get on the gas
   across the top, and jump off the kicker at the far end over a gap to the landing.
